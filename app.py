@@ -1,5 +1,6 @@
 """
 Streamlit Web App for Multi-Course Anki Flashcard Generation.
+Supports Google OAuth 2.0 Identity ("Sign in with Google") for Drive sync.
 """
 
 import os
@@ -18,8 +19,10 @@ load_dotenv(BASE_DIR / ".env")
 
 # Add scripts to sys.path
 sys.path.insert(0, str(BASE_DIR / ".agents" / "skills" / "anki-card-generator" / "scripts"))
+sys.path.insert(0, str(BASE_DIR))
 import anki_cli
 import generator
+import google_auth
 
 # Configure Streamlit page
 st.set_page_config(
@@ -33,36 +36,64 @@ st.markdown("""
 <style>
     .main-title { font-size: 2.2rem; font-weight: 700; color: #1E88E5; margin-bottom: 0.2rem; }
     .sub-title { font-size: 1.05rem; color: #555; margin-bottom: 1.5rem; }
-    .card-box {
-        background-color: #f8f9fa;
-        border: 1px solid #e0e0e0;
-        border-radius: 8px;
-        padding: 14px 18px;
-        margin-bottom: 12px;
-    }
-    .cloze-badge {
-        background-color: #E3F2FD;
-        color: #1565C0;
-        font-weight: 600;
-        padding: 2px 6px;
+    .google-btn {
+        background-color: #ffffff;
+        color: #3c4043;
+        border: 1px solid #dadce0;
         border-radius: 4px;
-        font-size: 0.85rem;
+        padding: 8px 16px;
+        text-align: center;
+        text-decoration: none;
+        display: inline-block;
+        font-weight: 500;
+        font-size: 14px;
+        box-shadow: 0 1px 2px rgba(60,64,67,0.3);
     }
+    .google-btn:hover { background-color: #f8f9fa; color: #202124; }
 </style>
 """, unsafe_allow_html=True)
 
+# Determine current redirect URI
+current_url = st.get_option("browser.serverAddress") or "localhost"
+if "streamlit.app" in current_url:
+    redirect_uri = f"https://{current_url}/"
+elif current_url == "localhost":
+    redirect_uri = "http://localhost:8501/"
+else:
+    redirect_uri = f"http://{current_url}:8501/"
+
 # Sidebar Configuration
 st.sidebar.title("⚙️ Settings")
+
+# Google Identity Authentication in Sidebar
+st.sidebar.subheader("👤 Google Account")
+drive_service, user_auth_info = google_auth.init_google_auth(redirect_uri)
+
+if drive_service and isinstance(user_auth_info, str) and not user_auth_info.startswith("http"):
+    st.sidebar.success(f"Signed in as:\n**{user_auth_info}**")
+    if st.sidebar.button("Log out"):
+        if "google_creds" in st.session_state:
+            del st.session_state["google_creds"]
+        st.rerun()
+elif isinstance(user_auth_info, str) and user_auth_info.startswith("http"):
+    st.sidebar.markdown(
+        f'<a href="{user_auth_info}" target="_self" class="google-btn">'
+        '<img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" width="16" style="vertical-align: middle; margin-right: 8px;"/>'
+        'Sign in with Google</a>',
+        unsafe_allow_html=True
+    )
+    st.sidebar.caption("Sign in to sync decks directly to your Google Drive.")
+else:
+    st.sidebar.caption("Google Identity not configured. Add GOOGLE_CLIENT_ID & SECRET to enable.")
 
 # API Key handling
 default_key = os.getenv("GEMINI_API_KEY", "")
 api_key = st.sidebar.text_input("Gemini API Key", value=default_key, type="password")
 
-# Google Drive Sync option
+# Google Drive Folder ID
 st.sidebar.markdown("---")
-st.sidebar.subheader("☁️ Google Drive Sync")
-auto_sync = st.sidebar.checkbox("Auto-sync output deck to Shared Drive", value=True)
-folder_id = st.sidebar.text_input("Shared Drive Folder ID", value=anki_cli.DEFAULT_SHARED_FOLDER_ID)
+st.sidebar.subheader("☁️ Google Drive Destination")
+folder_id = st.sidebar.text_input("Target Folder ID", value=anki_cli.DEFAULT_SHARED_FOLDER_ID)
 
 # Course selection / profiles
 ref_dir = BASE_DIR / ".agents" / "skills" / "anki-card-generator" / "references"
@@ -103,7 +134,7 @@ with tab_drive:
             dest.parent.mkdir(parents=True, exist_ok=True)
             download_success = False
 
-            # Try 1: Direct public download (no credentials required if file is shared)
+            # Try 1: Direct public download (no login needed if link is shared)
             try:
                 import urllib.request
                 public_url = f"https://drive.google.com/uc?export=download&id={fid}"
@@ -119,18 +150,28 @@ with tab_drive:
             except Exception:
                 pass
 
-            # Try 2: Authenticated Drive API (if credentials or token configured)
+            # Try 2: Signed-in User Drive Service
+            if not download_success and drive_service:
+                try:
+                    anki_cli.download_drive_file(drive_service, fid, dest)
+                    uploaded_pdf_path = str(dest)
+                    download_success = True
+                    st.success(f"Downloaded using your Google Account: {dest.name}")
+                except Exception as e:
+                    st.error(f"User Drive download error: {e}")
+
+            # Try 3: Default Service / Local Credentials fallback
             if not download_success:
                 try:
-                    service = anki_cli.get_drive_service()
-                    anki_cli.download_drive_file(service, fid, dest)
+                    fallback_service = anki_cli.get_drive_service()
+                    anki_cli.download_drive_file(fallback_service, fid, dest)
                     uploaded_pdf_path = str(dest)
                     download_success = True
                     st.success(f"Downloaded: {dest.name}")
                 except Exception as e:
                     st.error(
-                        f"Error downloading: {e}\n\n"
-                        "💡 Tip: You can drag & drop the PDF directly into the 'Upload Lecture PDF' tab!"
+                        f"Could not download file: {e}\n\n"
+                        "💡 Tip: Click 'Sign in with Google' on the sidebar or drag & drop the PDF into the 'Upload Lecture PDF' tab!"
                     )
 
 # Process PDF if available
@@ -154,7 +195,7 @@ if uploaded_pdf_path:
         if not api_key:
             st.error("Please enter a Gemini API Key in the sidebar.")
         else:
-            with st.spinner(f"Analyzing {total_slides} slides and crafting high-yield cards with Gemini 3.8 Flash..."):
+            with st.spinner(f"Analyzing {total_slides} slides with Gemini..."):
                 try:
                     payload = generator.generate_cards_from_text(
                         slide_text=slide_text,
@@ -193,35 +234,42 @@ if "generated_payload" in st.session_state:
     btn_col1, btn_col2 = st.columns([1, 1])
 
     with btn_col1:
-        # Build local .apkg for direct browser download
-        temp_apkg_path = BASE_DIR / "extracted" / f"{selected_course.replace(' ', '')}_Session_{session_num}.apkg"
-        temp_apkg_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Write temporary cards.json
         tmp_cards_json = BASE_DIR / "extracted" / "temp_cards.json"
+        tmp_cards_json.parent.mkdir(parents=True, exist_ok=True)
         tmp_cards_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
         if st.button("📦 Build & Sync to Google Drive", type="primary"):
             with st.spinner("Building .apkg and pushing to Google Drive..."):
+                active_service = drive_service or anki_cli.get_drive_service()
                 try:
-                    sys.argv = ["anki_cli.py", "sync", str(tmp_cards_json), "--folder-id", folder_id, "-w", str(BASE_DIR)]
-                    anki_cli.cmd_sync(anki_cli.argparse.Namespace(
-                        cards=str(tmp_cards_json),
-                        course=selected_course,
-                        session=session_num,
-                        append=False,
-                        folder_id=folder_id,
-                        workdir=str(BASE_DIR)
-                    ))
-                    st.success("Successfully synced to Google Drive shared folder!")
-                    st.markdown(f"👉 [Open Shared Google Drive Folder](https://drive.google.com/drive/folders/{folder_id})")
+                    course_compact = selected_course.replace(" ", "")
+                    remote_deck = anki_cli.find_course_apkg_on_drive(active_service, course_compact, selected_course, folder_id)
+                    work_dir = BASE_DIR / "extracted"
+                    
+                    if remote_deck:
+                        local_deck = work_dir / remote_deck['name']
+                        anki_cli.download_drive_file(active_service, remote_deck['id'], local_deck)
+                        tot_n, tot_c = anki_cli.update_existing_apkg(local_deck, edited_notes, payload.get("tag", f"#{course_compact}::Session::{session_num}"))
+                        # Update remote
+                        from googleapiclient.http import MediaFileUpload
+                        media = MediaFileUpload(str(local_deck), resumable=True)
+                        active_service.files().update(fileId=remote_deck['id'], media_body=media).execute()
+                        st.success(f"Updated '{remote_deck['name']}' in Google Drive! (Total Notes: {tot_n})")
+                    else:
+                        new_name = f"{course_compact} - Flashcards.apkg"
+                        local_deck = work_dir / new_name
+                        anki_cli.create_new_apkg(local_deck, f"{selected_course} - Flashcards", edited_notes, payload.get("tag", f"#{course_compact}::Session::{session_num}"))
+                        from googleapiclient.http import MediaFileUpload
+                        media = MediaFileUpload(str(local_deck), resumable=True)
+                        active_service.files().create(body={'name': new_name, 'parents': [folder_id]}, media_body=media).execute()
+                        st.success(f"Created and uploaded '{new_name}' to Google Drive!")
+
+                    st.markdown(f"👉 [Open Target Google Drive Folder](https://drive.google.com/drive/folders/{folder_id})")
                 except Exception as e:
                     st.error(f"Sync error: {e}")
 
     with btn_col2:
-        # Provide instant .apkg file download button
         if tmp_cards_json.exists():
-            # Build anki package in memory/temp for instant download
             download_deck_name = f"{selected_course.replace(' ', '')} - Session {session_num}.apkg"
             download_path = BASE_DIR / "extracted" / download_deck_name
             anki_cli.create_new_apkg(
