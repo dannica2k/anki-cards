@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+*.apkg
+*.tar.gz
+*.zip
+*.pdf
+extracted/
+credentials.json
+token.json
+session_*.txt
