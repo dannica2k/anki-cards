@@ -50,6 +50,32 @@ DEFAULT_SHARED_FOLDER_ID = '1JD0rlrkJIFJ6n4hv5Mxc9zLSP-UEZJja'
 
 def get_drive_service():
     """Authenticates and returns the Google Drive API service."""
+    from google.oauth2 import service_account
+
+    # 1. Check if Service Account JSON or Token is in environment / Streamlit secrets
+    sa_json = os.getenv("GCP_SA_KEY") or os.getenv("GDRIVE_SERVICE_ACCOUNT")
+    if sa_json:
+        try:
+            info = json.loads(sa_json) if isinstance(sa_json, str) and sa_json.startswith('{') else None
+            if info:
+                creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
+                return build('drive', 'v3', credentials=creds)
+        except Exception:
+            pass
+
+    # 2. Check token from secrets/env
+    raw_token = os.getenv("GDRIVE_TOKEN_JSON")
+    if raw_token:
+        try:
+            info = json.loads(raw_token)
+            creds = Credentials.from_authorized_user_info(info, SCOPES)
+            if creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            return build('drive', 'v3', credentials=creds)
+        except Exception:
+            pass
+
+    # 3. Check local file paths
     creds = None
     if os.path.exists(TOKEN_FILE):
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
@@ -59,7 +85,11 @@ def get_drive_service():
         else:
             cred_path = CREDENTIALS_FILE if os.path.exists(CREDENTIALS_FILE) else "credentials.json"
             if not os.path.exists(cred_path):
-                raise RuntimeError(f"Credentials file not found at {CREDENTIALS_FILE}")
+                raise RuntimeError(
+                    "Google Drive credentials not found on cloud server. "
+                    "For private files, add GCP_SA_KEY or GDRIVE_TOKEN_JSON to Streamlit Secrets, "
+                    "or upload the PDF directly using the 'Upload Lecture PDF' tab."
+                )
             flow = InstalledAppFlow.from_client_secrets_file(cred_path, SCOPES)
             creds = flow.run_local_server(port=0)
         os.makedirs(os.path.dirname(TOKEN_FILE), exist_ok=True)

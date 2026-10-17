@@ -98,16 +98,40 @@ with tab_drive:
     drive_url = st.text_input("Google Drive PDF Link or ID", placeholder="https://drive.google.com/file/d/...")
     if drive_url and st.button("Fetch from Drive"):
         with st.spinner("Downloading from Google Drive..."):
+            fid = anki_cli.extract_drive_id(drive_url)
+            dest = BASE_DIR / "extracted" / f"drive_download_{fid}.pdf"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            download_success = False
+
+            # Try 1: Direct public download (no credentials required if file is shared)
             try:
-                service = anki_cli.get_drive_service()
-                fid = anki_cli.extract_drive_id(drive_url)
-                dest = BASE_DIR / "extracted" / f"drive_download_{fid}.pdf"
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                anki_cli.download_drive_file(service, fid, dest)
-                uploaded_pdf_path = str(dest)
-                st.success(f"Downloaded: {dest.name}")
-            except Exception as e:
-                st.error(f"Error downloading: {e}")
+                import urllib.request
+                public_url = f"https://drive.google.com/uc?export=download&id={fid}"
+                req = urllib.request.Request(public_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    content = resp.read()
+                    if content.startswith(b'%PDF'):
+                        with open(dest, 'wb') as f:
+                            f.write(content)
+                        uploaded_pdf_path = str(dest)
+                        download_success = True
+                        st.success(f"Downloaded: {dest.name}")
+            except Exception:
+                pass
+
+            # Try 2: Authenticated Drive API (if credentials or token configured)
+            if not download_success:
+                try:
+                    service = anki_cli.get_drive_service()
+                    anki_cli.download_drive_file(service, fid, dest)
+                    uploaded_pdf_path = str(dest)
+                    download_success = True
+                    st.success(f"Downloaded: {dest.name}")
+                except Exception as e:
+                    st.error(
+                        f"Error downloading: {e}\n\n"
+                        "💡 Tip: You can drag & drop the PDF directly into the 'Upload Lecture PDF' tab!"
+                    )
 
 # Process PDF if available
 if uploaded_pdf_path:
