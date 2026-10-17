@@ -1,3 +1,4 @@
+import time
 """
 Card generation engine using Gemini API and Course Profiles.
 """
@@ -72,20 +73,42 @@ You MUST respond with valid JSON adhering to this schema:
 
     prompt = f"Here is the extracted text and handwritten annotations from Session {session_num} slides:\n\n{slide_text}"
 
-    response = client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            response_mime_type="application/json",
-            temperature=0.2
-        )
-    )
+    # Try primary model with fallback in case of temporary 503 capacity spikes
+    models_to_try = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
+    response = None
+    last_err = None
+
+    for m in models_to_try:
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(
+                    model=m,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        response_mime_type="application/json",
+                        temperature=0.2
+                    )
+                )
+                break
+            except Exception as e:
+                last_err = e
+                err_str = str(e)
+                if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                else:
+                    break
+        if response:
+            break
+
+    if not response:
+        raise last_err
 
     try:
         data = json.loads(response.text)
         return data
     except Exception as e:
-        # Fallback if markdown fence is present
         cleaned = re.sub(r'^```json\s*|\s*```$', '', response.text.strip())
         return json.loads(cleaned)
+
