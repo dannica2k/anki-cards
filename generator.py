@@ -73,13 +73,13 @@ You MUST respond with valid JSON adhering to this schema:
 
     prompt = f"Here is the extracted text and handwritten annotations from Session {session_num} slides:\n\n{slide_text}"
 
-    # Try primary model with fallback in case of temporary 503 capacity spikes
-    models_to_try = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
+    # Rock-solid high availability models verified with this API key
+    models_to_try = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"]
     response = None
     last_err = None
 
     for m in models_to_try:
-        for attempt in range(3):
+        for attempt in range(2):
             try:
                 response = client.models.generate_content(
                     model=m,
@@ -90,16 +90,17 @@ You MUST respond with valid JSON adhering to this schema:
                         temperature=0.2
                     )
                 )
-                break
+                if response and response.text:
+                    break
             except Exception as e:
                 last_err = e
                 err_str = str(e)
                 if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
-                    time.sleep(2 * (attempt + 1))
+                    time.sleep(1.5 * (attempt + 1))
                     continue
                 else:
                     break
-        if response:
+        if response and response.text:
             break
 
     if not response:
