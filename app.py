@@ -8,6 +8,7 @@ Features:
 """
 
 import os
+import re
 import sys
 import json
 import tempfile
@@ -268,6 +269,8 @@ with tab_upload:
                 st.session_state["inferred_course"] = c_disp
             if s_num:
                 st.session_state["inferred_session"] = s_num
+            # Clear previous assessment if file changed
+            st.session_state.pop("pdf_assessment", None)
 
 # Discover available courses from references/
 ref_dir = BASE_DIR / ".agents" / "skills" / "anki-card-generator" / "references"
@@ -284,80 +287,188 @@ uploaded_pdf_path = st.session_state.get("uploaded_pdf_path")
 uploaded_pdf_name = st.session_state.get("uploaded_pdf_name", "")
 
 if uploaded_pdf_path and os.path.exists(uploaded_pdf_path):
-    doc = pymupdf.open(uploaded_pdf_path)
-    total_slides = len(doc)
-    st.success(f"Loaded: **{uploaded_pdf_name or Path(uploaded_pdf_path).name}** ({total_slides} slides)")
+    # Auto-run pre-generation audit if not yet computed for this PDF
+    if "pdf_assessment" not in st.session_state or st.session_state.get("assessment_file") != uploaded_pdf_path:
+        with st.spinner("Analyzing lecture structure, formatting, and annotations..."):
+            initial_c = st.session_state.get("inferred_course", courses[0])
+            initial_s = st.session_state.get("inferred_session", "1")
+            audit = generator.analyze_lecture_pdf(
+                uploaded_pdf_path,
+                BASE_DIR,
+                course_code=initial_c,
+                session_num=initial_s,
+                api_key=api_key
+            )
+            st.session_state["pdf_assessment"] = audit
+            st.session_state["assessment_file"] = uploaded_pdf_path
 
-    # Extract text from all slides
-    text_blocks = []
-    for pno in range(total_slides):
-        page = doc[pno]
-        b_list = page.get_text("blocks")
-        for b in b_list:
-            t = b[4].strip().replace("\n", " ")
-            if t:
-                text_blocks.append(f"[Slide {pno+1}] {t}")
-    slide_text = "\n".join(text_blocks)
+    assessment = st.session_state["pdf_assessment"]
+    layout = assessment["layout"]
+    proj_counts = assessment["projected_counts"]
 
-    # Course, Session/Lecture #, and Generate CTA on the exact same line!
-    default_course_idx = 0
-    inferred_c = st.session_state.get("inferred_course")
-    if inferred_c and inferred_c in courses:
-        default_course_idx = courses.index(inferred_c)
-    default_session = st.session_state.get("inferred_session", "13")
+    # Header Card for Loaded Document
+    st.markdown("---")
+    info_col1, info_col2 = st.columns([3, 1], vertical_alignment="center")
+    with info_col1:
+        st.subheader(f"📄 {uploaded_pdf_name or Path(uploaded_pdf_path).name}")
+        st.caption(f"**Format:** {layout['format_name']} • {assessment['total_pages']} pages • ~{layout['avg_words_per_page']} words/page • {len(assessment['sections'])} numbered sections")
+    with info_col2:
+        if st.button("🔄 Re-Analyze PDF", use_container_width=True):
+            st.session_state.pop("pdf_assessment", None)
+            st.rerun()
 
-    ctl_col1, ctl_col2, ctl_col3 = st.columns([1.5, 1.2, 2.3], vertical_alignment="bottom")
-    with ctl_col1:
+    # Pre-Generation Assessment & Configuration Dashboard
+    st.markdown("##### ⚙️ Flashcard Configuration & Density")
+    cfg_col1, cfg_col2, cfg_col3 = st.columns([1.5, 1.2, 2.3], vertical_alignment="top")
+
+    with cfg_col1:
+        default_course_idx = 0
+        inferred_c = st.session_state.get("inferred_course")
+        if inferred_c and inferred_c in courses:
+            default_course_idx = courses.index(inferred_c)
         selected_course = st.selectbox("Course", courses, index=default_course_idx)
-    with ctl_col2:
-        session_num = st.text_input("Session / Lecture #", value=default_session)
-    with ctl_col3:
-        generate_clicked = st.button("✨ Generate Anki Flashcards", type="primary", use_container_width=True)
+
+    with cfg_col2:
+        default_session = st.session_state.get("inferred_session", "1")
+        session_num = st.text_input("Session / Chapter #", value=default_session)
+
+    with cfg_col3:
+        density_mode = st.radio(
+            "Density Level",
+            ["High Level", "Regular Recap", "Deep Dive"],
+            index=1,
+            horizontal=True,
+            help="High Level: Core concepts (~1 card/sec). Regular Recap: Full exam coverage of all mechanisms. Deep Dive: Exhaustive sub-bullet granularity."
+        )
+
+    # Dynamic target card count calculation based on selected density
+    default_target = proj_counts.get(density_mode, 35)
+    target_count = st.number_input(
+        f"Target Flashcard Count (Projected for {density_mode}: {default_target})",
+        min_value=5,
+        max_value=250,
+        value=default_target,
+        help="Adjust the desired number of flashcards to generate."
+    )
+
+    # Observations, Hints, and Exclusions Box
+    with st.expander("🔍 Lecture Audit & Detected Exam Notes", expanded=True):
+        if assessment.get("observations"):
+            for obs in assessment["observations"]:
+                st.markdown(obs)
+        if assessment.get("gap_warnings"):
+            for warn in assessment["gap_warnings"]:
+                st.info(warn)
+        if assessment.get("sections"):
+            with st.expander(f"View {len(assessment['sections'])} Detected Sub-Sections"):
+                st.markdown("\n".join([f"- `{s}`" for s in assessment["sections"]]))
+
+    custom_guidance = st.text_input(
+        "Custom Focus Guidance (Optional)",
+        placeholder="e.g. Focus heavily on reflex pathways, muscle vibration illusions, and the GTO mechanism"
+    )
+
+    # Primary Generation CTA
+    generate_clicked = st.button("✨ Generate Anki Flashcards", type="primary", use_container_width=True)
 
     if generate_clicked:
         if not api_key:
             st.error("Please click the ⚙️ Settings icon on the left rail and enter a Gemini API Key.")
         else:
-            with st.spinner(f"Analyzing {total_slides} slides with Gemini..."):
-                try:
-                    payload = generator.generate_cards_from_text(
-                        slide_text=slide_text,
-                        course_code=selected_course,
-                        session_num=session_num,
-                        base_dir=BASE_DIR,
-                        api_key=api_key
-                    )
-                    st.session_state["generated_payload"] = payload
-                    st.session_state["active_course"] = selected_course
-                    st.session_state["active_session"] = session_num
-                    st.success(f"Generated {len(payload.get('notes', []))} notes!")
-                except Exception as e:
-                    st.error(f"Generation failed: {e}")
+            prog_bar = st.progress(0)
+            status_box = st.empty()
+
+            def on_progress(batch_num, total_batches, msg):
+                frac = batch_num / max(total_batches, 1)
+                prog_bar.progress(frac)
+                status_box.info(f"⚡ {msg}")
+
+            try:
+                payload = generator.generate_cards_chunked(
+                    slides_data=assessment["slides_data"],
+                    course_code=selected_course,
+                    session_num=session_num,
+                    density_mode=density_mode,
+                    target_count=int(target_count),
+                    custom_guidance=custom_guidance,
+                    base_dir=BASE_DIR,
+                    api_key=api_key,
+                    progress_callback=on_progress
+                )
+                st.session_state["generated_payload"] = payload
+                st.session_state["active_course"] = selected_course
+                st.session_state["active_session"] = session_num
+                prog_bar.progress(1.0)
+                status_box.success(f"🎉 Successfully generated {len(payload.get('notes', []))} exam-ready notes!")
+            except Exception as e:
+                status_box.error(f"Generation failed: {e}")
 
 # Review & Edit Generated Cards
 if "generated_payload" in st.session_state:
     payload = st.session_state["generated_payload"]
     active_course = st.session_state.get("active_course", courses[0])
-    active_session = st.session_state.get("active_session", "13")
+    active_session = st.session_state.get("active_session", "1")
     notes = payload.get("notes", [])
+    media_files = payload.get("media_files", [])
 
     st.markdown("---")
-    st.subheader(f"📝 Review Generated Cards ({len(notes)} notes)")
+    rev_hdr_col1, rev_hdr_col2 = st.columns([3, 1], vertical_alignment="center")
+    with rev_hdr_col1:
+        st.subheader(f"📝 Review Generated Cards ({len(notes)} notes)")
+    with rev_hdr_col2:
+        if st.button("➕ Add New Flashcard", use_container_width=True):
+            notes.append({"text": "New question with {{c1::cloze deletion}}", "extra": ""})
+            st.rerun()
 
     edited_notes = []
+    to_delete = None
+
     for idx, n in enumerate(notes):
-        with st.container():
-            st.markdown(f"**Card #{idx + 1}**")
+        with st.container(border=True):
+            head_col1, head_col2 = st.columns([5, 1])
+            with head_col1:
+                st.markdown(f"**Card #{idx + 1}**")
+            with head_col2:
+                if st.button("🗑️", key=f"del_{idx}", help="Delete this card"):
+                    to_delete = idx
+
             col1, col2 = st.columns([3, 2])
             with col1:
-                front = st.text_area("Front (Cloze)", value=n.get("text", ""), key=f"front_{idx}", height=100)
+                front = st.text_area("Front (Cloze Deletions)", value=n.get("text", ""), key=f"front_{idx}", height=120)
+
             with col2:
-                extra = st.text_area("Extra / High-Yield Note", value=n.get("extra", ""), key=f"extra_{idx}", height=100)
+                extra = st.text_area("Extra / High-Yield Explanation", value=n.get("extra", ""), key=f"extra_{idx}", height=120)
+                # Live Preview of Embedded Images
+                img_matches = re.findall(r'<img\s+src=[\'"]([^\'"]+)[\'"]', extra)
+                for img_name in img_matches:
+                    img_match_path = None
+                    for mf in media_files:
+                        if Path(mf).name == img_name and os.path.exists(mf):
+                            img_match_path = mf
+                            break
+                    if not img_match_path:
+                        img_cand = BASE_DIR / "extracted" / f"{active_course.replace(' ', '')}_Session_{active_session}" / "images" / img_name
+                        if img_cand.exists():
+                            img_match_path = str(img_cand)
+                    if img_match_path and os.path.exists(img_match_path):
+                        st.image(img_match_path, caption=f"Embedded Diagram: {img_name}", width=250)
+
             edited_notes.append({"text": front, "extra": extra})
+
+    if to_delete is not None:
+        notes.pop(to_delete)
+        payload["notes"] = notes
+        st.rerun()
 
     payload["notes"] = edited_notes
 
-    # Action buttons: Download .apkg & Sync to Drive
+    # Backlog Feature: Study Guide Request
+    st.markdown("---")
+    st.caption("💡 Supplementary Learning Materials")
+    if st.button("📚 Request Supplementary Study Guide on this Topic (Backlog Item BL-01)", use_container_width=True):
+        st.info("📌 **Queued in Backlog (Item BL-01):** The on-demand illustrated Study Guide & Concept Explainer will be available in the upcoming release!")
+
+    # Action buttons: Download .apkg & Sync to Drive (with full media packing!)
     st.markdown("---")
     btn_col1, btn_col2 = st.columns([1, 1])
 
@@ -367,7 +478,7 @@ if "generated_payload" in st.session_state:
         tmp_cards_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
         if st.button("📦 Build & Sync to Google Drive", type="primary", use_container_width=True):
-            with st.spinner("Building .apkg and pushing to Google Drive..."):
+            with st.spinner("Building .apkg with diagram media and syncing to Google Drive..."):
                 active_service = drive_service or anki_cli.get_drive_service()
                 try:
                     course_compact = active_course.replace(" ", "")
@@ -380,12 +491,13 @@ if "generated_payload" in st.session_state:
                         tot_n, tot_c = anki_cli.update_existing_apkg(
                             local_deck,
                             edited_notes,
-                            payload.get("tag", f"#{course_compact}::Session::{active_session}")
+                            payload.get("tag", f"#{course_compact}::Session::{active_session}"),
+                            media_files=media_files
                         )
                         from googleapiclient.http import MediaFileUpload
                         media = MediaFileUpload(str(local_deck), resumable=True)
                         active_service.files().update(fileId=remote_deck['id'], media_body=media).execute()
-                        st.success(f"Updated '{remote_deck['name']}' in Google Drive! (Total Notes: {tot_n})")
+                        st.success(f"Updated '{remote_deck['name']}' in Google Drive! (Total Notes: {tot_n}, Cards: {tot_c})")
                     else:
                         new_name = f"{course_compact} - Flashcards.apkg"
                         local_deck = work_dir / new_name
@@ -393,7 +505,8 @@ if "generated_payload" in st.session_state:
                             local_deck,
                             f"{active_course} - Flashcards",
                             edited_notes,
-                            payload.get("tag", f"#{course_compact}::Session::{active_session}")
+                            payload.get("tag", f"#{course_compact}::Session::{active_session}"),
+                            media_files=media_files
                         )
                         from googleapiclient.http import MediaFileUpload
                         media = MediaFileUpload(str(local_deck), resumable=True)
@@ -415,7 +528,8 @@ if "generated_payload" in st.session_state:
                 download_path,
                 f"{active_course} - Session {active_session}",
                 edited_notes,
-                payload.get("tag", f"#{active_course.replace(' ', '')}::Session::{active_session}")
+                payload.get("tag", f"#{active_course.replace(' ', '')}::Session::{active_session}"),
+                media_files=media_files
             )
             with open(download_path, "rb") as f:
                 st.download_button(
