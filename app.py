@@ -75,8 +75,7 @@ drive_service, user_auth_info = google_auth.init_google_auth(redirect_uri)
 if drive_service and isinstance(user_auth_info, str) and not user_auth_info.startswith("http"):
     st.sidebar.success(f"Signed in as:\n**{user_auth_info}**")
     if st.sidebar.button("Log out"):
-        if "google_creds" in st.session_state:
-            del st.session_state["google_creds"]
+        google_auth.clear_cached_creds()
         st.rerun()
 elif isinstance(user_auth_info, str) and user_auth_info.startswith("http"):
     st.sidebar.link_button("🔑 Sign in with Google", user_auth_info, use_container_width=True)
