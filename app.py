@@ -20,9 +20,12 @@ load_dotenv(BASE_DIR / ".env")
 # Add scripts to sys.path
 sys.path.insert(0, str(BASE_DIR / ".agents" / "skills" / "anki-card-generator" / "scripts"))
 sys.path.insert(0, str(BASE_DIR))
+import importlib
 import anki_cli
 import generator
 import google_auth
+importlib.reload(google_auth)
+importlib.reload(generator)
 
 # Configure Streamlit page
 st.set_page_config(
