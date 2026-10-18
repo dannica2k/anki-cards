@@ -15,7 +15,7 @@ import pymupdf
 
 # Load .env
 BASE_DIR = Path(__file__).resolve().parent
-load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR / ".env", override=True)
 
 # Add scripts to sys.path
 sys.path.insert(0, str(BASE_DIR / ".agents" / "skills" / "anki-card-generator" / "scripts"))
@@ -113,7 +113,6 @@ st.markdown('<div class="sub-title">Upload course slides (PDF) to generate exam-
 # Tabs: File Upload vs Google Drive URL
 tab_upload, tab_drive = st.tabs(["📄 Upload Lecture PDF", "🔗 Paste Google Drive Link"])
 
-uploaded_pdf_path = None
 slide_text = ""
 
 with tab_upload:
@@ -121,7 +120,8 @@ with tab_upload:
     if uploaded_file is not None:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(uploaded_file.read())
-            uploaded_pdf_path = tmp.name
+            st.session_state["uploaded_pdf_path"] = tmp.name
+            st.session_state["uploaded_pdf_name"] = uploaded_file.name
 
 with tab_drive:
     drive_url = st.text_input("Google Drive PDF Link or ID", placeholder="https://drive.google.com/file/d/...")
@@ -132,51 +132,57 @@ with tab_drive:
             dest.parent.mkdir(parents=True, exist_ok=True)
             download_success = False
 
-            # Try 1: Direct public download (no login needed if link is shared)
-            try:
-                import urllib.request
-                public_url = f"https://drive.google.com/uc?export=download&id={fid}"
-                req = urllib.request.Request(public_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    content = resp.read()
-                    if content.startswith(b'%PDF'):
-                        with open(dest, 'wb') as f:
-                            f.write(content)
-                        uploaded_pdf_path = str(dest)
-                        download_success = True
-                        st.success(f"Downloaded: {dest.name}")
-            except Exception:
-                pass
-
-            # Try 2: Signed-in User Drive Service
-            if not download_success and drive_service:
+            # Try 1: Signed-in User Drive Service (preserves original filename!)
+            if drive_service:
                 try:
-                    anki_cli.download_drive_file(drive_service, fid, dest)
-                    uploaded_pdf_path = str(dest)
+                    downloaded_path = anki_cli.download_drive_file(drive_service, fid, BASE_DIR / "extracted")
+                    st.session_state["uploaded_pdf_path"] = str(downloaded_path)
+                    st.session_state["uploaded_pdf_name"] = downloaded_path.name
                     download_success = True
-                    st.success(f"Downloaded using your Google Account: {dest.name}")
-                except Exception as e:
-                    st.error(f"User Drive download error: {e}")
+                    st.success(f"Downloaded using your Google Account: {downloaded_path.name}")
+                except Exception:
+                    pass
+
+            # Try 2: Direct public download (no login needed if link is shared)
+            if not download_success:
+                try:
+                    import urllib.request
+                    public_url = f"https://drive.google.com/uc?export=download&id={fid}"
+                    req = urllib.request.Request(public_url, headers={'User-Agent': 'Mozilla/5.0'})
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        content = resp.read()
+                        if content.startswith(b'%PDF'):
+                            with open(dest, 'wb') as f:
+                                f.write(content)
+                            st.session_state["uploaded_pdf_path"] = str(dest)
+                            st.session_state["uploaded_pdf_name"] = dest.name
+                            download_success = True
+                            st.success(f"Downloaded: {dest.name}")
+                except Exception:
+                    pass
 
             # Try 3: Default Service / Local Credentials fallback
             if not download_success:
                 try:
                     fallback_service = anki_cli.get_drive_service()
-                    anki_cli.download_drive_file(fallback_service, fid, dest)
-                    uploaded_pdf_path = str(dest)
+                    downloaded_path = anki_cli.download_drive_file(fallback_service, fid, BASE_DIR / "extracted")
+                    st.session_state["uploaded_pdf_path"] = str(downloaded_path)
+                    st.session_state["uploaded_pdf_name"] = downloaded_path.name
                     download_success = True
-                    st.success(f"Downloaded: {dest.name}")
+                    st.success(f"Downloaded: {downloaded_path.name}")
                 except Exception as e:
                     st.error(
                         f"Could not download file: {e}\n\n"
                         "💡 Tip: Click 'Sign in with Google' on the sidebar or drag & drop the PDF into the 'Upload Lecture PDF' tab!"
                     )
 
-# Process PDF if available
-if uploaded_pdf_path:
+# Process PDF if available in session_state
+uploaded_pdf_path = st.session_state.get("uploaded_pdf_path")
+uploaded_pdf_name = st.session_state.get("uploaded_pdf_name", "")
+if uploaded_pdf_path and os.path.exists(uploaded_pdf_path):
     doc = pymupdf.open(uploaded_pdf_path)
     total_slides = len(doc)
-    st.info(f"Loaded: **{Path(uploaded_pdf_path).name}** ({total_slides} slides)")
+    st.info(f"Loaded: **{uploaded_pdf_name or Path(uploaded_pdf_path).name}** ({total_slides} slides)")
 
     # Extract text from all slides
     text_blocks = []
