@@ -154,7 +154,9 @@ st.markdown("""
 # Determine redirect URI safely
 redirect_uri = google_auth.safe_get_secret("REDIRECT_URI")
 if not redirect_uri:
-    if os.path.exists("/home/daniel"):
+    if os.getenv("K_SERVICE"):
+        redirect_uri = "https://anki-studio-bacy4cozoa-uc.a.run.app/"
+    elif os.path.exists("/home/daniel"):
         redirect_uri = "http://localhost:8501/"
     else:
         redirect_uri = "https://mara-anki-studio.streamlit.app/"

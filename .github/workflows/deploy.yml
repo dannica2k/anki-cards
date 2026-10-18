@@ -57,3 +57,6 @@ jobs:
           flags: '--allow-unauthenticated'
           env_vars: |
             GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+            GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+            GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+            REDIRECT_URI=https://anki-studio-bacy4cozoa-uc.a.run.app/
