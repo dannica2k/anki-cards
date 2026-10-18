@@ -41,9 +41,9 @@ st.set_page_config(
 )
 
 # Custom CSS:
-# 1. Hide default sidebar and header clutter
-# 2. Hide "Press Enter to apply" input instructions
-# 3. Style thin left icon rail and align the Generate CTA row
+# 1. Hide default sidebar and "Press Enter to apply"
+# 2. Prevent top title truncation with proper top padding
+# 3. Gmail-style slim left navigation rail with Material Icons and hidden dropdown arrows
 st.markdown("""
 <style>
     [data-testid="stSidebar"], [data-testid="collapsedControl"] {
@@ -53,35 +53,64 @@ st.markdown("""
         display: none !important;
     }
     .block-container {
-        padding-top: 2rem !important;
+        padding-top: 3.5rem !important;
+        padding-left: 2rem !important;
+        padding-right: 2rem !important;
         max-width: 1200px !important;
     }
     .main-title {
         font-size: 2.1rem;
         font-weight: 700;
         color: #1E88E5;
-        margin-bottom: 0.1rem;
-        line-height: 1.2;
+        margin-top: 0.2rem;
+        margin-bottom: 0.2rem;
+        line-height: 1.3;
     }
     .sub-title {
         font-size: 1.0rem;
-        color: #666;
-        margin-bottom: 1.2rem;
+        color: #5f6368;
+        margin-bottom: 1.4rem;
     }
-    /* Style the thin left utility rail */
-    div[data-testid="stHorizontalBlock"] > div:first-child .stPopover > button {
-        width: 44px !important;
-        height: 44px !important;
+    /* Gmail-style left rail container */
+    div[data-testid="stHorizontalBlock"]:first-of-type > div:first-child {
+        background-color: #f6f8fc;
+        border-right: 1px solid #e1e5ea;
+        border-radius: 16px;
+        padding: 12px 6px !important;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        min-width: 56px !important;
+        max-width: 60px !important;
+    }
+    /* Circular icon-only buttons like Gmail rail */
+    div[data-testid="stHorizontalBlock"]:first-of-type > div:first-child [data-testid="stPopover"] > div > button {
+        width: 42px !important;
+        height: 42px !important;
+        min-height: 42px !important;
         padding: 0 !important;
-        border-radius: 10px !important;
+        border-radius: 50% !important;
+        border: none !important;
+        background-color: transparent !important;
+        color: #444746 !important;
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
-        font-size: 1.25rem !important;
+        box-shadow: none !important;
+        transition: background-color 0.15s ease;
     }
-    /* Hide the tiny down-chevron inside the icon-only popover buttons */
-    div[data-testid="stHorizontalBlock"] > div:first-child .stPopover > button svg {
+    div[data-testid="stHorizontalBlock"]:first-of-type > div:first-child [data-testid="stPopover"] > div > button:hover {
+        background-color: #e1e5ea !important;
+    }
+    /* Hide the built-in popover expand chevron arrow completely */
+    div[data-testid="stHorizontalBlock"]:first-of-type > div:first-child [data-testid="stPopover"] > div > button svg,
+    div[data-testid="stHorizontalBlock"]:first-of-type > div:first-child [data-testid="stPopover"] > div > button > div > span:last-child {
         display: none !important;
+    }
+    /* Size the Material icon nicely */
+    div[data-testid="stHorizontalBlock"]:first-of-type > div:first-child [data-testid="stPopover"] > div > button span[data-testid="stIconMaterial"] {
+        font-size: 24px !important;
+        margin: 0 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -98,13 +127,13 @@ if not redirect_uri:
 drive_service, user_auth_info = google_auth.init_google_auth(redirect_uri)
 is_logged_in = bool(drive_service and isinstance(user_auth_info, str) and not user_auth_info.startswith("http"))
 
-# Layout: Thin left utility rail + Main content area
-rail_col, main_col = st.columns([0.06, 0.94], gap="medium")
+# Layout: Gmail-style thin left rail + Main content area
+rail_col, main_col = st.columns([0.05, 0.95], gap="medium")
 
 with rail_col:
-    # 1. Top icon: Login / Account popover
-    login_icon = "🟢" if is_logged_in else "👤"
-    with st.popover(login_icon, help="Google Account"):
+    # 1. Top icon: Login / Account popover (Material icon)
+    account_icon = ":material/verified_user:" if is_logged_in else ":material/account_circle:"
+    with st.popover("", icon=account_icon, help="Google Account"):
         st.markdown("##### 👤 Google Account")
         if is_logged_in:
             st.success(f"Signed in as:\n**{user_auth_info}**")
@@ -117,8 +146,8 @@ with rail_col:
         else:
             st.caption("Add GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET to enable Google Sign-In.")
 
-    # 2. Second icon right under: Settings popover
-    with st.popover("⚙️", help="Settings"):
+    # 2. Second icon right under: Settings popover (Material icon)
+    with st.popover("", icon=":material/settings:", help="Settings"):
         st.markdown("##### ⚙️ Settings")
         default_key = google_auth.safe_get_secret("GEMINI_API_KEY")
         api_key = st.text_input("Gemini API Key", value=default_key, type="password")
