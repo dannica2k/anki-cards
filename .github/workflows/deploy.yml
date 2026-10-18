@@ -6,7 +6,7 @@ on:
       - main
 
 env:
-  PROJECT_ID: anki-cards-511917
+  PROJECT_ID: smartapps-498505
   GAR_LOCATION: us-central1
   SERVICE_NAME: anki-studio
   REGION: us-central1
