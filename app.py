@@ -29,6 +29,7 @@ sys.path.insert(0, str(BASE_DIR))
 import anki_cli
 import generator
 import google_auth
+from version import __version__
 
 importlib.reload(anki_cli)
 importlib.reload(google_auth)
@@ -73,11 +74,28 @@ st.markdown("""
         display: none !important;
     }
     [data-testid="stSidebarUserContent"] {
-        padding: 16px 10px !important;
+        padding: 16px 8px 16px 8px !important;
         display: flex !important;
         flex-direction: column !important;
         align-items: center !important;
         gap: 10px !important;
+        height: 100vh !important;
+        box-sizing: border-box !important;
+    }
+    .sidebar-version {
+        position: fixed !important;
+        bottom: 14px !important;
+        left: 0 !important;
+        width: 64px !important;
+        font-size: 11px !important;
+        font-weight: 600 !important;
+        color: #9aa0a6 !important;
+        text-align: center !important;
+        white-space: nowrap !important;
+        letter-spacing: 0.2px !important;
+        line-height: 1 !important;
+        user-select: none !important;
+        z-index: 99 !important;
     }
 
     /* Circular icon-only buttons strictly inside the sidebar rail */
@@ -167,6 +185,9 @@ with st.sidebar:
         default_key = google_auth.safe_get_secret("GEMINI_API_KEY")
         api_key = st.text_input("Gemini API Key", value=default_key, type="password")
         folder_id = st.text_input("Target Google Drive Folder ID", value=anki_cli.DEFAULT_SHARED_FOLDER_ID)
+
+    # 3. Bottom version label
+    st.markdown(f'<div class="sidebar-version">{__version__}</div>', unsafe_allow_html=True)
 
 
 def fetch_drive_pdf(drive_url_str: str):
