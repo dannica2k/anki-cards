@@ -32,6 +32,7 @@ import tempfile
 import argparse
 from pathlib import Path
 
+from typing import Optional, Dict, Any, List, Tuple
 import pymupdf
 import genanki
 import zstandard as zstd
@@ -302,6 +303,162 @@ def _encode_media_entry(filename: str, size: int, sha1_bytes: bytes) -> bytes:
         + b"\x1a\x14" + sha1_bytes
     )
     return b"\x0a" + _encode_varint(len(entry)) + entry
+
+
+def get_deck_info_from_apkg(apkg_path: Path) -> Optional[Dict[str, Any]]:
+    """
+    Inspects an existing .apkg (supporting Anki 2.1b, 2.1, and 2.0 SQLite formats)
+    and extracts the primary non-Default deck name, deck ID, notetype ID, and note count.
+    """
+    if not apkg_path or not os.path.exists(str(apkg_path)):
+        return None
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with zipfile.ZipFile(str(apkg_path), 'r') as z:
+                z.extractall(tmpdir)
+
+            anki21b_path = os.path.join(tmpdir, 'collection.anki21b')
+            db_path = os.path.join(tmpdir, 'collection.anki21')
+
+            is_zstd = os.path.exists(anki21b_path)
+            if is_zstd:
+                dctx = zstd.ZstdDecompressor()
+                with open(anki21b_path, 'rb') as ifh, open(db_path, 'wb') as ofh:
+                    dctx.copy_stream(ifh, ofh)
+            elif not os.path.exists(db_path):
+                db_path = os.path.join(tmpdir, 'collection.anki2')
+
+            if not os.path.exists(db_path):
+                return None
+
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+
+            deck_name = None
+            deck_id = None
+            mid = None
+
+            # 1. Try modern decks table (Anki 2.1b schema)
+            try:
+                cur.execute('SELECT id, name FROM decks WHERE name != "Default" ORDER BY id ASC LIMIT 1')
+                row = cur.fetchone()
+                if row:
+                    deck_id, deck_name = row[0], row[1]
+            except Exception:
+                pass
+
+            # 2. Try col.decks JSON (Anki 2.0 / legacy schema)
+            if not deck_name:
+                try:
+                    cur.execute('SELECT decks FROM col')
+                    col_row = cur.fetchone()
+                    if col_row and col_row[0]:
+                        decks_dict = json.loads(col_row[0])
+                        for d_id, d_data in decks_dict.items():
+                            if d_data.get("name") != "Default":
+                                deck_name = d_data.get("name")
+                                deck_id = int(d_id)
+                                break
+                except Exception:
+                    pass
+
+            # 3. Get notetype ID & verify did
+            try:
+                cur.execute('SELECT mid, did FROM cards JOIN notes ON cards.nid = notes.id LIMIT 1')
+                c_row = cur.fetchone()
+                if c_row:
+                    mid = c_row[0]
+                    if not deck_id:
+                        deck_id = c_row[1]
+            except Exception:
+                pass
+
+            cur.execute('SELECT count(*) FROM notes')
+            tot_notes = cur.fetchone()[0]
+
+            conn.close()
+
+            return {
+                "deck_name": deck_name or Path(apkg_path).stem,
+                "deck_id": deck_id,
+                "notetype_id": mid,
+                "total_notes": tot_notes,
+                "file_name": Path(apkg_path).name,
+                "path": str(apkg_path)
+            }
+    except Exception as e:
+        print(f"Error inspecting .apkg {apkg_path}: {e}")
+        return None
+
+
+def find_baseline_apkg(course_code: str, base_dir: Path, service=None, folder_id: str = None) -> Optional[Path]:
+    """
+    Locates the existing master .apkg for a course:
+    1. Checks local base_dir and extracted/ directory.
+    2. Checks course reference markdown for Target Deck File Pattern or Drive ID.
+    3. Searches the Google Drive folder if service is provided.
+    Returns the local Path to the baseline .apkg.
+    """
+    course_compact = course_code.replace(" ", "").upper()
+    course_display = course_code.upper()
+    work_dir = base_dir / "extracted"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Check local base_dir for exact matches or course patterns
+    candidates = []
+    for search_dir in [base_dir, work_dir]:
+        for apkg in search_dir.glob("*.apkg"):
+            stem = apkg.stem.upper()
+            if course_compact in stem or course_display in stem:
+                # Exclude single session exports like "BPK207 - Session 3a.apkg"
+                if " - SESSION " in stem or " - CHAPTER " in stem:
+                    continue
+                candidates.append(apkg)
+
+    if candidates:
+        # Sort by file size descending (master deck has the most notes/media!)
+        candidates.sort(key=lambda p: p.stat().st_size, reverse=True)
+        return candidates[0]
+
+    # 2. Check course reference markdown for Drive ID or file pattern
+    ref_dir = base_dir / ".agents" / "skills" / "anki-card-generator" / "references"
+    course_file = ref_dir / f"{course_code.lower().replace(' ', '-')}.md"
+    target_drive_id = None
+    target_pattern = None
+
+    if course_file.exists():
+        text = course_file.read_text(encoding="utf-8")
+        id_match = re.search(r'Drive ID:\s*`?([a-zA-Z0-9_-]{20,50})`?', text)
+        if id_match:
+            target_drive_id = id_match.group(1)
+        pat_match = re.search(r'Target Deck File Pattern:\s*`?([^`\n]+)`?', text)
+        if pat_match:
+            target_pattern = pat_match.group(1).split("(")[0].strip()
+
+    # If Drive ID found in reference and service available, download it
+    if target_drive_id and service:
+        try:
+            dest = work_dir / (target_pattern or f"{course_display} - Flashcards.apkg")
+            if not dest.exists():
+                download_drive_file(service, target_drive_id, dest)
+            return dest
+        except Exception as e:
+            print(f"Could not download baseline from Drive ID {target_drive_id}: {e}")
+
+    # 3. Check Google Drive folder
+    if service and folder_id:
+        try:
+            remote = find_course_apkg_on_drive(service, course_compact, course_display, folder_id)
+            if remote:
+                dest = work_dir / remote["name"]
+                if not dest.exists():
+                    download_drive_file(service, remote["id"], dest)
+                return dest
+        except Exception as e:
+            print(f"Could not find course apkg on Drive folder {folder_id}: {e}")
+
+    return None
 
 
 def update_existing_apkg(apkg_path: Path, notes_list: list, tag_str: str, replace_session_tag: bool = True, media_files: list = None):

@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import json
+import shutil
 import tempfile
 import importlib
 from pathlib import Path
@@ -506,72 +507,80 @@ if "generated_payload" in st.session_state:
 
     # Action buttons: Download .apkg & Sync to Drive (with full media packing!)
     st.markdown("---")
+
+    active_service = drive_service or anki_cli.get_drive_service()
+    course_compact = active_course.replace(" ", "")
+    work_dir = BASE_DIR / "extracted"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    # Dynamically find existing master .apkg (local or Drive)
+    baseline_apkg = anki_cli.find_baseline_apkg(active_course, BASE_DIR, service=active_service, folder_id=folder_id)
+    deck_info = anki_cli.get_deck_info_from_apkg(baseline_apkg) if baseline_apkg else None
+
+    if deck_info:
+        canonical_deck_name = deck_info["deck_name"]
+        canonical_file_name = deck_info["file_name"]
+    else:
+        canonical_deck_name = f"{active_course} - Flashcards"
+        canonical_file_name = f"{course_compact} - Flashcards.apkg"
+
+    master_export_path = work_dir / canonical_file_name
+    tag_str = payload.get("tag", f"#{course_compact}::Session::{active_session}")
+
+    # Build the updated package (master or new)
+    if baseline_apkg and os.path.exists(str(baseline_apkg)):
+        if Path(baseline_apkg).resolve() != master_export_path.resolve():
+            shutil.copyfile(str(baseline_apkg), str(master_export_path))
+        tot_notes, tot_cards = anki_cli.update_existing_apkg(
+            master_export_path,
+            edited_notes,
+            tag_str,
+            media_files=media_files
+        )
+    else:
+        anki_cli.create_new_apkg(
+            master_export_path,
+            canonical_deck_name,
+            edited_notes,
+            tag_str,
+            media_files=media_files
+        )
+        tot_notes = len(edited_notes)
+        tot_cards = tot_notes
+
+    st.caption(f"🎯 **Target Anki Deck:** `{canonical_deck_name}` • Master Archive: `{canonical_file_name}` ({tot_notes} notes)")
+
     btn_col1, btn_col2 = st.columns([1, 1])
 
     with btn_col1:
-        tmp_cards_json = BASE_DIR / "extracted" / "temp_cards.json"
-        tmp_cards_json.parent.mkdir(parents=True, exist_ok=True)
-        tmp_cards_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
         if st.button("📦 Build & Sync to Google Drive", type="primary", use_container_width=True):
-            with st.spinner("Building .apkg with diagram media and syncing to Google Drive..."):
-                active_service = drive_service or anki_cli.get_drive_service()
+            with st.spinner(f"Syncing '{canonical_file_name}' to Google Drive..."):
                 try:
-                    course_compact = active_course.replace(" ", "")
                     remote_deck = anki_cli.find_course_apkg_on_drive(active_service, course_compact, active_course, folder_id)
-                    work_dir = BASE_DIR / "extracted"
+                    from googleapiclient.http import MediaFileUpload
+                    media = MediaFileUpload(str(master_export_path), resumable=True)
 
                     if remote_deck:
-                        local_deck = work_dir / remote_deck['name']
-                        anki_cli.download_drive_file(active_service, remote_deck['id'], local_deck)
-                        tot_n, tot_c = anki_cli.update_existing_apkg(
-                            local_deck,
-                            edited_notes,
-                            payload.get("tag", f"#{course_compact}::Session::{active_session}"),
-                            media_files=media_files
-                        )
-                        from googleapiclient.http import MediaFileUpload
-                        media = MediaFileUpload(str(local_deck), resumable=True)
                         active_service.files().update(fileId=remote_deck['id'], media_body=media).execute()
-                        st.success(f"Updated '{remote_deck['name']}' in Google Drive! (Total Notes: {tot_n}, Cards: {tot_c})")
+                        st.success(f"Updated '{remote_deck['name']}' in Google Drive! (Total Notes: {tot_notes})")
                     else:
-                        new_name = f"{course_compact} - Flashcards.apkg"
-                        local_deck = work_dir / new_name
-                        anki_cli.create_new_apkg(
-                            local_deck,
-                            f"{active_course} - Flashcards",
-                            edited_notes,
-                            payload.get("tag", f"#{course_compact}::Session::{active_session}"),
-                            media_files=media_files
-                        )
-                        from googleapiclient.http import MediaFileUpload
-                        media = MediaFileUpload(str(local_deck), resumable=True)
                         active_service.files().create(
-                            body={'name': new_name, 'parents': [folder_id]},
+                            body={'name': canonical_file_name, 'parents': [folder_id]},
                             media_body=media
                         ).execute()
-                        st.success(f"Created and uploaded '{new_name}' to Google Drive!")
+                        st.success(f"Created and uploaded '{canonical_file_name}' to Google Drive! (Total Notes: {tot_notes})")
 
                     st.markdown(f"👉 [Open Target Google Drive Folder](https://drive.google.com/drive/folders/{folder_id})")
                 except Exception as e:
                     st.error(f"Sync error: {e}")
 
     with btn_col2:
-        if tmp_cards_json.exists():
-            download_deck_name = f"{active_course.replace(' ', '')} - Session {active_session}.apkg"
-            download_path = BASE_DIR / "extracted" / download_deck_name
-            anki_cli.create_new_apkg(
-                download_path,
-                f"{active_course} - Session {active_session}",
-                edited_notes,
-                payload.get("tag", f"#{active_course.replace(' ', '')}::Session::{active_session}"),
-                media_files=media_files
+        with open(master_export_path, "rb") as f:
+            st.download_button(
+                label=f"⬇️ Download Updated Deck ({tot_notes} notes)",
+                data=f.read(),
+                file_name=canonical_file_name,
+                mime="application/octet-stream",
+                use_container_width=True,
+                help=f"Internal Anki Deck Name: '{canonical_deck_name}'. Importing into Anki updates this deck in place without duplicates!"
             )
-            with open(download_path, "rb") as f:
-                st.download_button(
-                    label="⬇️ Download .apkg File Directly",
-                    data=f.read(),
-                    file_name=download_deck_name,
-                    mime="application/octet-stream",
-                    use_container_width=True
-                )
