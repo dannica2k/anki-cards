@@ -29,11 +29,12 @@ sys.path.insert(0, str(BASE_DIR))
 import anki_cli
 import generator
 import google_auth
-from version import __version__
+import version
 
 importlib.reload(anki_cli)
 importlib.reload(google_auth)
 importlib.reload(generator)
+importlib.reload(version)
 
 # Configure Streamlit page (keep sidebar always expanded as a narrow 64px Gmail rail)
 st.set_page_config(
@@ -187,7 +188,7 @@ with st.sidebar:
         folder_id = st.text_input("Target Google Drive Folder ID", value=anki_cli.DEFAULT_SHARED_FOLDER_ID)
 
     # 3. Bottom version label
-    st.markdown(f'<div class="sidebar-version">{__version__}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="sidebar-version">{version.__version__}</div>', unsafe_allow_html=True)
 
 
 def fetch_drive_pdf(drive_url_str: str):
@@ -307,7 +308,15 @@ if ref_dir.exists():
             if c_name not in courses:
                 courses.append(c_name)
 
-# Process PDF if available in session_state
+# Process PDF if available in session_state (or via ?test_pdf=1 for visual verification)
+if "uploaded_pdf_path" not in st.session_state and st.query_params.get("test_pdf"):
+    sample_pdf = BASE_DIR / "extracted" / "BPK 207 - Chapter 2 - annotated.pdf"
+    if sample_pdf.exists():
+        st.session_state["uploaded_pdf_path"] = str(sample_pdf)
+        st.session_state["uploaded_pdf_name"] = sample_pdf.name
+        st.session_state["inferred_course"] = "BPK 207"
+        st.session_state["inferred_session"] = "2"
+
 uploaded_pdf_path = st.session_state.get("uploaded_pdf_path")
 uploaded_pdf_name = st.session_state.get("uploaded_pdf_name", "")
 
@@ -344,7 +353,7 @@ if uploaded_pdf_path and os.path.exists(uploaded_pdf_path):
 
     # Pre-Generation Assessment & Configuration Dashboard
     st.markdown("##### ⚙️ Flashcard Configuration & Density")
-    cfg_col1, cfg_col2, cfg_col3 = st.columns([1.5, 1.2, 2.3], vertical_alignment="top")
+    cfg_col1, cfg_col2, cfg_col3, cfg_col4 = st.columns([1.1, 0.9, 2.4, 1.6], vertical_alignment="top")
 
     with cfg_col1:
         default_course_idx = 0
@@ -366,15 +375,15 @@ if uploaded_pdf_path and os.path.exists(uploaded_pdf_path):
             help="High Level: Core concepts (~1 card/sec). Regular Recap: Full exam coverage of all mechanisms. Deep Dive: Exhaustive sub-bullet granularity."
         )
 
-    # Dynamic target card count calculation based on selected density
-    default_target = proj_counts.get(density_mode, 35)
-    target_count = st.number_input(
-        f"Target Flashcard Count (Projected for {density_mode}: {default_target})",
-        min_value=5,
-        max_value=250,
-        value=default_target,
-        help="Adjust the desired number of flashcards to generate."
-    )
+    with cfg_col4:
+        default_target = proj_counts.get(density_mode, 35)
+        target_count = st.number_input(
+            f"Target Cards (Est: {default_target})",
+            min_value=5,
+            max_value=250,
+            value=default_target,
+            help=f"Projected {default_target} cards for {density_mode}. Adjust desired count as needed."
+        )
 
     # Observations, Hints, and Exclusions Box
     with st.expander("🔍 Lecture Audit & Detected Exam Notes", expanded=True):
