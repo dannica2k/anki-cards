@@ -321,14 +321,36 @@ Density Setting: {density_mode}
 {course_rules}
 
 ### CARD GENERATION MANDATES:
-1. **MANDATORY TESTING MANDATE (NO CONFINING KEY CONCEPTS TO EXTRA)**:
-   - Every substantive concept, sub-section, anatomical pathway, reflex arc, clinical symptom, and experimental outcome MUST be directly tested on its own card.
-   - The 'extra' field is strictly for concise reinforcement, physiological rationale, or embedded diagrams—NEVER as a dumping ground for testable concepts that lack their own card!
-2. **HIERARCHICAL SPACED REPETITION (PARENT / CHILD CARDS)**:
+1. **THE "SUPPORT-ONLY" EXTRA FIELD RULE (ZERO UNTESTED CONCEPTS IN EXTRA)**:
+   - The 'extra' field must **STRICTLY SUPPORT** the card's tested clozes; it must **NEVER INTRODUCE NEW OR DEEPER UNTESTED CONCEPTS**.
+   - **The Testability Axiom**: If a piece of information is substantive enough to appear on an exam (a specific anatomical structure, mechanism, ion channel, receptor type, threshold, equation, or clinical effect), it **MUST BE TESTED AS AN ACTIVE-RECALL CLOZE NOTE**. It cannot live solely inside 'extra'.
+   - **What BELONGS in 'extra'**:
+     • **Diagram Grounding**: An embedded figure tag (`<img src="FILENAME">`) with a single concise sentence directing the student to observe the specific visual cue that confirms the clozed answer.
+     • **Cross-Referencing Tested Concepts**: Explicit connections or contrasts to other cards in the deck (e.g., *"Contrast with Card on Utricle..."*).
+     • **Direct Rationale ("The Why")**: A 1-sentence physiological, anatomical, or chemical explanation reinforcing *why* the clozed relationship is true.
+   - **What is STRICTLY FORBIDDEN in 'extra'**:
+     • Writing long textbook summaries that explain new physiological cascades, named pathways, or experimental nuances that lack their own flashcard.
+2. **THE "EXTRA EXTRACTION" PRINCIPLE (CARD SPAWNING)**:
+   - Before writing the 'extra' field of any note, perform this check:
+     *"Does this explanation contain a key concept, term, step, or relationship that a professor could test on an exam?"*
+     If **YES**, you MUST **EXTRACT IT OUT** and generate a dedicated active-recall Cloze card for it! Keep the original card's 'extra' brief and strictly supportive.
+   - **Benchmark Comparison**:
+     ❌ *BAD (Buried Mechanisms in Extra):*
+       Text: "The {{c1::utricle}} senses acceleration in the horizontal plane."
+       Extra: "<img src="fig.png"><br>The utricle contains calcium carbonate stones called otoconia resting atop a gelatinous otolithic membrane. Underneath, hair cells have stereocilia that bend towards a single tall kinocilium to open mechanically gated potassium channels (K+ influx), causing depolarization."
+       *(Otoconia, kinocilium, K+ influx, and depolarization are high-yield exam concepts, but the student is never quizzed on them!)*
+     ✅ *GOOD (Extracted into Dedicated Cards):*
+       • Card 1 (Organ & Plane): "Within the otolith organs, the {{c1::saccule}} senses acceleration in {{c2::the vertical plane}}, whereas the {{c1::utricle}} senses acceleration in {{c2::the horizontal plane}} as well as {{c2::head tilt}} relative to gravity."
+         Extra: "<img src="fig.png"><br><b>Spatial Orientation:</b> Utricle macula is oriented horizontally; saccule macula is oriented vertically."
+       • Card 2 (Hair Cell Transduction): "In vestibular hair cells, bundle deflection {{c1::towards}} the kinocilium opens mechanically gated channels causing {{c2::K⁺ influx and depolarization}}, whereas deflection {{c1::away from}} the kinocilium causes {{c2::hyperpolarization}}."
+         Extra: "<b>Ionic Basis:</b> High K⁺ in endolymph drives passive K⁺ entry into hair cells upon mechanical gating."
+       • Card 3 (Otoconia & Inertia): "The otolithic membrane consists of a gelatinous matrix weighted by dense calcium carbonate crystals called {{c1::otoconia}}, which impart {{c2::inertial mass}} that deflects underlying hair cell bundles during linear acceleration."
+         Extra: "<b>Function:</b> High density of otoconia causes inertial lag behind head movement, shearing the hair bundles."
+3. **HIERARCHICAL SPACED REPETITION (PARENT / CHILD CARDS)**:
    - For multi-part topics or numbered lists (e.g. 3 techniques to study proprioception):
      a) Create an overarching **Parent / Roadmap Card** testing the overall category names and count.
      b) Create dedicated **Child / Deep-Dive Cards** drilling into the exact mechanisms, experimental observations, and physiological distinctions of EACH item.
-3. **COORDINATED FUNCTIONAL CLOZE GROUPING (TIERED CATEGORY & DETAIL RULE)**:
+4. **COORDINATED FUNCTIONAL CLOZE GROUPING (TIERED CATEGORY & DETAIL RULE)**:
    - When testing contrasting pairs, anatomical structures, or categorized lists, NEVER assign sequential arbitrary cloze numbers (e.g., {{c1::A}} ({{c2::X}}) and {{c3::B}} ({{c4::Y}})).
    - Instead, identify the **core concept tiers** and group parallel elements into matching cloze numbers (c1, c2):
      • **c1 (The Structural / Entity Tier):** Cloze all anatomical structures, organ names, classes, or category labels together.
@@ -338,15 +360,15 @@ Density Setting: {density_mode}
      • *Otolith Organs & Planes:* "Within the otolith organs, the {{c1::saccule}} senses acceleration in {{c2::the vertical plane}}, whereas the {{c1::utricle}} senses acceleration in {{c2::the horizontal plane}} as well as {{c2::head tilt}} relative to gravity."
      • *Rotational Dimensions & Axes:* "The semicircular canals sense angular head acceleration across three rotational dimensions: {{c1::roll}} (around {{c2::x}}-axis), {{c1::pitch}} (around {{c2::y}}-axis), and {{c1::yaw}} (around {{c2::z}}-axis)."
      • *Muscle Spindle Fibers & Afferents:* "Within the muscle spindle, {{c1::dynamic bag1}} fibres are innervated primarily by {{c2::Group Ia}} afferents, whereas {{c1::static bag2 and chain}} fibres are innervated primarily by {{c2::Group II}} afferents."
-4. **FORMULATION & DISCIPLINE ADAPTATION**:
+5. **FORMULATION & DISCIPLINE ADAPTATION**:
    - For biochemistry/chemistry: use 3-cloze balanced reaction format, ΔG′°, cofactors, active-site residues.
    - For neurobiology/kinesiology: test afferent/efferent wiring, receptor types, stretch/force mechanics, reflex circuits, vibration paradigms, and somatotopic organization.
    - For social sciences: test definitions, theoretical frameworks, contrasting models.
-5. **SLIDE DIAGRAM EMBEDDING**:
+6. **SLIDE DIAGRAM EMBEDDING**:
    - When a slide features an illustrative diagram (available in the extracted figures list), embed it in the 'extra' field using `<img src="FILENAME">` alongside a concise explanation.
-6. **ATOMICITY & NO BINARY CLOZES**:
+7. **ATOMICITY & NO BINARY CLOZES**:
    - Cloze specific molecular players, anatomical structures, or mechanisms. Never cloze generic binary words like high/low, yes/no, increase/decrease.
-7. **FORMATTING**:
+8. **FORMATTING**:
    - Use clean HTML (<b>, <br>) and Unicode symbols (α, β, γ, Δ, ⇌, →, °, ², ⁺). NEVER use LaTeX backslashes.
 """
 
@@ -394,7 +416,8 @@ Density Setting: {density_mode}
             batch_text_parts.append(f"\nUser Custom Focus Guidance:\n{custom_guidance}")
 
         batch_prompt = f"""Generate exactly {b_target} distinct, high-yield Anki Cloze flashcards for Slides {start_slide}–{end_slide}.
-Ensure thorough coverage of every substantive concept in this batch. Adhere to the Mandatory Testing Mandate and Hierarchical Parent/Child rules.
+Ensure thorough coverage of every substantive concept in this batch. Adhere strictly to the "Support-Only" Extra Field Rule, the Extra Extraction Principle, and Hierarchical Parent/Child rules.
+REMINDER: Never bury testable mechanisms or key terms in the 'extra' field; extract them into dedicated cards!
 
 Slide Content:
 {chr(10).join(batch_text_parts)}
