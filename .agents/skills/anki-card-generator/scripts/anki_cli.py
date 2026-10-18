@@ -85,11 +85,7 @@ def get_drive_service():
         else:
             cred_path = CREDENTIALS_FILE if os.path.exists(CREDENTIALS_FILE) else "credentials.json"
             if not os.path.exists(cred_path):
-                raise RuntimeError(
-                    "Google Drive credentials not found on cloud server. "
-                    "For private files, add GCP_SA_KEY or GDRIVE_TOKEN_JSON to Streamlit Secrets, "
-                    "or upload the PDF directly using the 'Upload Lecture PDF' tab."
-                )
+                raise RuntimeError("Please log in to your Google Account.")
             flow = InstalledAppFlow.from_client_secrets_file(cred_path, SCOPES)
             creds = flow.run_local_server(port=0)
         os.makedirs(os.path.dirname(TOKEN_FILE), exist_ok=True)

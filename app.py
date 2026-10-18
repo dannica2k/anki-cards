@@ -226,10 +226,14 @@ def fetch_drive_pdf(drive_url_str: str):
             st.session_state["inferred_session"] = s_num
         st.session_state["fetch_error"] = None
     else:
-        st.session_state["fetch_error"] = (
-            f"Could not download file: {last_err}\n\n"
-            "💡 Tip: Click the Account icon on the left rail to Sign in with Google, or drag & drop the PDF into the 'Upload Lecture PDF' tab!"
-        )
+        if not is_logged_in:
+            st.session_state["fetch_error"] = "Please log in to your Google Account."
+        else:
+            err_msg = str(last_err) if last_err else ""
+            if "not found" in err_msg.lower() or "404" in err_msg:
+                st.session_state["fetch_error"] = "File not found. Please check the link and permissions."
+            else:
+                st.session_state["fetch_error"] = "Please log in to your Google Account."
 
 
 # Main Content Area
