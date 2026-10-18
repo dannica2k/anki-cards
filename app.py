@@ -156,11 +156,11 @@ st.markdown("""
 redirect_uri = google_auth.safe_get_secret("REDIRECT_URI")
 if not redirect_uri:
     if os.getenv("K_SERVICE"):
-        redirect_uri = "https://anki-studio-bacy4cozoa-uc.a.run.app/"
+        redirect_uri = "https://anki.maranica.com/"
     elif os.path.exists("/home/daniel"):
         redirect_uri = "http://localhost:8501/"
     else:
-        redirect_uri = "https://mara-anki-studio.streamlit.app/"
+        redirect_uri = "https://anki.maranica.com/"
 
 # Initialize Google Auth
 drive_service, user_auth_info = google_auth.init_google_auth(redirect_uri)
