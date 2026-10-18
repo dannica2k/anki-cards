@@ -60,9 +60,13 @@ def init_google_auth(redirect_uri: str):
 
     if auth_code and "google_creds" not in st.session_state:
         try:
-            # Relax scope comparison if Google returns openid/profile/email in different order
             os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
-            flow = Flow.from_client_config(client_config, scopes=SCOPES, redirect_uri=redirect_uri)
+            flow = Flow.from_client_config(
+                client_config,
+                scopes=SCOPES,
+                redirect_uri=redirect_uri,
+                autogenerate_code_verifier=False
+            )
             flow.fetch_token(code=auth_code)
             creds = flow.credentials
             st.session_state["google_creds"] = creds
@@ -82,7 +86,12 @@ def init_google_auth(redirect_uri: str):
         except Exception:
             del st.session_state["google_creds"]
 
-    # Not logged in: generate auth URL
-    flow = Flow.from_client_config(client_config, scopes=SCOPES, redirect_uri=redirect_uri)
+    # Not logged in: generate auth URL without stateful PKCE code_verifier
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=SCOPES,
+        redirect_uri=redirect_uri,
+        autogenerate_code_verifier=False
+    )
     auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline')
     return None, auth_url
