@@ -53,14 +53,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Determine current redirect URI
-current_url = st.get_option("browser.serverAddress") or "localhost"
-if "streamlit.app" in current_url:
-    redirect_uri = f"https://{current_url}/"
-elif current_url == "localhost":
-    redirect_uri = "http://localhost:8501/"
-else:
-    redirect_uri = f"http://{current_url}:8501/"
+# Determine redirect URI (allow override via secret/env or default to production app URL)
+redirect_uri = os.getenv("REDIRECT_URI") or st.secrets.get("REDIRECT_URI", "")
+if not redirect_uri:
+    server_addr = st.get_option("browser.serverAddress") or ""
+    if "localhost" in server_addr or server_addr == "127.0.0.1":
+        redirect_uri = "http://localhost:8501/"
+    else:
+        redirect_uri = "https://mara-anki-studio.streamlit.app/"
 
 # Sidebar Configuration
 st.sidebar.title("⚙️ Settings")
