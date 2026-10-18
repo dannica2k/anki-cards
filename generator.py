@@ -360,15 +360,25 @@ Density Setting: {density_mode}
      • *Otolith Organs & Planes:* "Within the otolith organs, the {{c1::saccule}} senses acceleration in {{c2::the vertical plane}}, whereas the {{c1::utricle}} senses acceleration in {{c2::the horizontal plane}} as well as {{c2::head tilt}} relative to gravity."
      • *Rotational Dimensions & Axes:* "The semicircular canals sense angular head acceleration across three rotational dimensions: {{c1::roll}} (around {{c2::x}}-axis), {{c1::pitch}} (around {{c2::y}}-axis), and {{c1::yaw}} (around {{c2::z}}-axis)."
      • *Muscle Spindle Fibers & Afferents:* "Within the muscle spindle, {{c1::dynamic bag1}} fibres are innervated primarily by {{c2::Group Ia}} afferents, whereas {{c1::static bag2 and chain}} fibres are innervated primarily by {{c2::Group II}} afferents."
-5. **FORMULATION & DISCIPLINE ADAPTATION**:
+5. **BIDIRECTIONAL DEFINITION TESTING RULE (TERM ↔ MEANING)**:
+   - When a card tests a definition or core scientific concept, NEVER test only in one direction (giving the whole definition and only clozing the term).
+   - True exam mastery requires testing in BOTH directions on the note:
+     • **`c1` (Term Recall):** Cloze the formal term/concept name (*[Definition] → [Term]*).
+     • **`c2` (Definition / Functional Role Recall):** Cloze the complete functional description/definition (*[Term] → [What it actually means/does]*).
+     • **`c3` (Underlying Driver / Mechanism Tier, if applicable):** Cloze the driving anatomical structure, effector, or mechanism.
+   - **Benchmark Examples to ALWAYS emulate**:
+     • *Accommodation:* "{{c2::The dynamic process of altering the shape and curvature of the crystalline lens to focus objects at varying distances onto the retina}} is called {{c1::accommodation}}, which is driven by the contraction and relaxation of the {{c3::ciliary muscles}}."
+     • *Proprioception:* "{{c2::The ability to sense the position, orientation, and movement of the body and limbs in space without visual guidance}} is called {{c1::proprioception}}, mediated primarily by {{c3::muscle spindles and Golgi tendon organs}}."
+     • *Alpha-Gamma Co-activation:* "{{c2::The simultaneous activation of alpha and gamma motoneurons to maintain intrafusal fiber tautness during muscle contraction}} is called {{c1::alpha-gamma co-activation}}, which prevents {{c3::the spindle from falling slack/silent}}."
+6. **FORMULATION & DISCIPLINE ADAPTATION**:
    - For biochemistry/chemistry: use 3-cloze balanced reaction format, ΔG′°, cofactors, active-site residues.
    - For neurobiology/kinesiology: test afferent/efferent wiring, receptor types, stretch/force mechanics, reflex circuits, vibration paradigms, and somatotopic organization.
    - For social sciences: test definitions, theoretical frameworks, contrasting models.
-6. **SLIDE DIAGRAM EMBEDDING**:
+7. **SLIDE DIAGRAM EMBEDDING**:
    - When a slide features an illustrative diagram (available in the extracted figures list), embed it in the 'extra' field using `<img src="FILENAME">` alongside a concise explanation.
-7. **ATOMICITY & NO BINARY CLOZES**:
+8. **ATOMICITY & NO BINARY CLOZES**:
    - Cloze specific molecular players, anatomical structures, or mechanisms. Never cloze generic binary words like high/low, yes/no, increase/decrease.
-8. **FORMATTING**:
+9. **FORMATTING**:
    - Use clean HTML (<b>, <br>) and Unicode symbols (α, β, γ, Δ, ⇌, →, °, ², ⁺). NEVER use LaTeX backslashes.
 """
 

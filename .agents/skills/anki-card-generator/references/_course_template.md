@@ -28,3 +28,11 @@ Copy this file to `references/<course-code-lowercase>.md` when setting up a new 
 - **Support-Only Extra:** The `extra` field exists strictly to support the tested clozes (via diagram grounding `<img src="...">`, cross-referencing other cards, or a 1-sentence physiological/mechanistic rationale). It must NEVER introduce new, untested concepts or structures.
 - **The Testability Axiom:** If a piece of information is testable on an exam, it MUST have its own active-recall Cloze card.
 - **Extra Extraction Check:** Before finalizing `extra`, ask: *"Does this contain a key term, mechanism, or step that could be asked on an exam?"* If YES, extract it out into a dedicated card and keep `extra` strictly supportive!
+
+---
+
+## 4. Bidirectional Definition Testing Rule (Term ↔ Meaning)
+When a card tests a definition, phenomenon, or core scientific concept, test both ways on the note:
+- **`c1` (Term Recall):** `[Definition / Description] → [Term]`
+- **`c2` (Definition / Meaning Recall):** `[Term] → [What it actually means/does]`
+- **`c3` (Mechanistic Driver / Effector):** Key effector, organ, enzyme, or driver.
