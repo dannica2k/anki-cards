@@ -26,6 +26,7 @@ Each course has its own pedagogical style, visual/image requirements, and format
 - **Existing Courses:**
   - **MBB 321 (Intermediary Metabolism):** Read [references/mbb-321.md](./references/mbb-321.md) before generating cards for `MBB 321`.
   - **BPK 207 (Sensorimotor Control & Learning):** Read [references/bpk-207.md](./references/bpk-207.md) before generating cards for `BPK 207`.
+  - **BPK 305 (Human Locomotor Neuroscience):** Read [references/bpk-305.md](./references/bpk-305.md) before generating cards for `BPK 305`.
 - **New Courses:**
   - If the user provides material for a course that does not yet have a file in `references/`, check [references/_course_template.md](./references/_course_template.md), ask the user (or infer from a sample deck) whether the course is equation-focused, text-focused, or diagram/image-heavy, and create `references/<course-code>.md`.
 - **Continuous Feedback Loop:**
@@ -38,12 +39,18 @@ Each course has its own pedagogical style, visual/image requirements, and format
 1. **Minimum Information Principle (Atomicity):**
    - Never cloze an entire multi-part sentence or full equation as a single giant blank.
    - Group clozes logically (`c1`, `c2`, `c3`) so each card tests one cohesive concept.
-2. **No Trivial Binary Clozes:**
+2. **Coordinated Functional Cloze Grouping (Tiered Category & Detail Rule):**
+   - When testing contrasting pairs, anatomical structures, or categorized lists, NEVER assign sequential arbitrary cloze numbers (e.g. `{{c1::A}} ({{c2::X}}) and {{c3::B}} ({{c4::Y}})`).
+   - Group parallel elements into coordinated tiers:
+     - **`c1` (The Structural / Entity Tier):** Cloze all anatomical structures, organs, or category labels together.
+     - **`c2` (The Functional / Coordinate / Detail Tier):** Cloze all corresponding physiological roles, planes of motion, axes, or mechanisms together.
+   - Example: *"The vestibular system detects head acceleration using two sets of end organs: the {{c1::otoliths}} (which sense {{c2::linear}} acceleration) and the {{c1::semicircular canals}} (which sense {{c2::angular}} acceleration)."*
+3. **No Trivial Binary Clozes:**
    - Never cloze `{{c1::high}}` vs. `low` or `{{c1::yes}}` vs. `no`. Cloze the physiological outcome, mechanism, or molecular player instead.
-3. **Cue Lists Clearly:**
+4. **Cue Lists Clearly:**
    - When testing a list of items, include the count in the prompt (e.g., *"The 3 biological roles of X:"*) so the learner knows what is expected.
-4. **Always Populate the `extra` Field:**
-   - Use the `extra` field on every note to provide brief high-yield context, physiological rationale, or an embedded slide diagram (`<img src="...">`).
+5. **Always Populate the `extra` Field:**
+   - Use the `extra` field on every note to provide brief high-yield context, physiological rationale, or an embedded slide diagram (`<img src="...">`). Never hide substantive testable material solely in `extra`.
 
 ---
 

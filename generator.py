@@ -328,15 +328,25 @@ Density Setting: {density_mode}
    - For multi-part topics or numbered lists (e.g. 3 techniques to study proprioception):
      a) Create an overarching **Parent / Roadmap Card** testing the overall category names and count.
      b) Create dedicated **Child / Deep-Dive Cards** drilling into the exact mechanisms, experimental observations, and physiological distinctions of EACH item.
-3. **FORMULATION & DISCIPLINE ADAPTATION**:
+3. **COORDINATED FUNCTIONAL CLOZE GROUPING (TIERED CATEGORY & DETAIL RULE)**:
+   - When testing contrasting pairs, anatomical structures, or categorized lists, NEVER assign sequential arbitrary cloze numbers (e.g., {{c1::A}} ({{c2::X}}) and {{c3::B}} ({{c4::Y}})).
+   - Instead, identify the **core concept tiers** and group parallel elements into matching cloze numbers (c1, c2):
+     • **c1 (The Structural / Entity Tier):** Cloze all anatomical structures, organ names, classes, or category labels together.
+     • **c2 (The Functional / Coordinate / Detail Tier):** Cloze all corresponding physiological roles, planes of motion, axes, or mechanisms together.
+   - Benchmark Examples to ALWAYS emulate:
+     • *Vestibular End Organs:* "The vestibular system detects head acceleration using two sets of end organs: the {{c1::otoliths}} (which sense {{c2::linear}} acceleration) and the {{c1::semicircular canals}} (which sense {{c2::angular}} acceleration)."
+     • *Otolith Organs & Planes:* "Within the otolith organs, the {{c1::saccule}} senses acceleration in {{c2::the vertical plane}}, whereas the {{c1::utricle}} senses acceleration in {{c2::the horizontal plane}} as well as {{c2::head tilt}} relative to gravity."
+     • *Rotational Dimensions & Axes:* "The semicircular canals sense angular head acceleration across three rotational dimensions: {{c1::roll}} (around {{c2::x}}-axis), {{c1::pitch}} (around {{c2::y}}-axis), and {{c1::yaw}} (around {{c2::z}}-axis)."
+     • *Muscle Spindle Fibers & Afferents:* "Within the muscle spindle, {{c1::dynamic bag1}} fibres are innervated primarily by {{c2::Group Ia}} afferents, whereas {{c1::static bag2 and chain}} fibres are innervated primarily by {{c2::Group II}} afferents."
+4. **FORMULATION & DISCIPLINE ADAPTATION**:
    - For biochemistry/chemistry: use 3-cloze balanced reaction format, ΔG′°, cofactors, active-site residues.
    - For neurobiology/kinesiology: test afferent/efferent wiring, receptor types, stretch/force mechanics, reflex circuits, vibration paradigms, and somatotopic organization.
    - For social sciences: test definitions, theoretical frameworks, contrasting models.
-4. **SLIDE DIAGRAM EMBEDDING**:
+5. **SLIDE DIAGRAM EMBEDDING**:
    - When a slide features an illustrative diagram (available in the extracted figures list), embed it in the 'extra' field using `<img src="FILENAME">` alongside a concise explanation.
-5. **ATOMICITY & NO BINARY CLOZES**:
+6. **ATOMICITY & NO BINARY CLOZES**:
    - Cloze specific molecular players, anatomical structures, or mechanisms. Never cloze generic binary words like high/low, yes/no, increase/decrease.
-6. **FORMATTING**:
+7. **FORMATTING**:
    - Use clean HTML (<b>, <br>) and Unicode symbols (α, β, γ, Δ, ⇌, →, °, ², ⁺). NEVER use LaTeX backslashes.
 """
 
