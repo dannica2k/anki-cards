@@ -24,6 +24,7 @@ import importlib
 import anki_cli
 import generator
 import google_auth
+importlib.reload(anki_cli)
 importlib.reload(google_auth)
 importlib.reload(generator)
 

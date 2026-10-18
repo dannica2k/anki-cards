@@ -99,14 +99,21 @@ def get_drive_service():
 
 
 def extract_drive_id(url_or_id: str) -> str:
-    """Extracts the Google Drive file/folder ID from a URL or returns the ID directly."""
-    m = re.search(r'/d/([a-zA-Z0-9_-]+)', url_or_id)
+    """Extracts the Google Drive file/folder ID from a URL, filename, or raw ID string."""
+    m = re.search(r'/d/([a-zA-Z0-9_-]{20,50})', url_or_id)
     if m:
         return m.group(1)
-    m = re.search(r'id=([a-zA-Z0-9_-]+)', url_or_id)
+    m = re.search(r'id=([a-zA-Z0-9_-]{20,50})', url_or_id)
     if m:
         return m.group(1)
-    m = re.search(r'/folders/([a-zA-Z0-9_-]+)', url_or_id)
+    m = re.search(r'/folders/([a-zA-Z0-9_-]{20,50})', url_or_id)
+    if m:
+        return m.group(1)
+    m = re.search(r'drive_download_([a-zA-Z0-9_-]{20,50})', url_or_id)
+    if m:
+        return m.group(1)
+    # Fallback: look for a standalone 25-44 char alphanumeric token typical of Drive IDs
+    m = re.search(r'\b([a-zA-Z0-9_-]{25,44})\b', url_or_id.strip())
     if m:
         return m.group(1)
     return url_or_id.strip()
