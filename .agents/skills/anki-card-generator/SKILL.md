@@ -25,6 +25,7 @@ This skill provides a streamlined, end-to-end workflow for turning lecture slide
 Each course has its own pedagogical style, visual/image requirements, and formatting rules stored in `references/<course-code>.md`:
 - **Existing Courses:**
   - **MBB 321 (Intermediary Metabolism):** Read [references/mbb-321.md](./references/mbb-321.md) before generating cards for `MBB 321`.
+  - **BPK 207 (Sensorimotor Control & Learning):** Read [references/bpk-207.md](./references/bpk-207.md) before generating cards for `BPK 207`.
 - **New Courses:**
   - If the user provides material for a course that does not yet have a file in `references/`, check [references/_course_template.md](./references/_course_template.md), ask the user (or infer from a sample deck) whether the course is equation-focused, text-focused, or diagram/image-heavy, and create `references/<course-code>.md`.
 - **Continuous Feedback Loop:**

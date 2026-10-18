@@ -135,7 +135,7 @@ def parse_course_and_session(filename: str):
         course_display = "UNKNOWN"
         course_compact = "UNKNOWN"
 
-    session_match = re.search(r'(?:Session|Lecture|Week|Mod|Ch|Chapter)\s*[-_#]?\s*(\d+)', base, re.IGNORECASE)
+    session_match = re.search(r'(?:Session|Lecture|Week|Mod|Ch|Chapter|Section)\s*[-_#]?\s*(\d+[A-Za-z]?)', base, re.IGNORECASE)
     session_num = session_match.group(1) if session_match else "1"
     return course_display, course_compact, session_num
 
@@ -289,8 +289,28 @@ def extract_cloze_numbers(text):
     return nums if nums else [1]
 
 
+def _encode_varint(val: int) -> bytes:
+    out = bytearray()
+    while (val & ~0x7F) != 0:
+        out.append((val & 0x7F) | 0x80)
+        val >>= 7
+    out.append(val & 0x7F)
+    return bytes(out)
+
+
+def _encode_media_entry(filename: str, size: int, sha1_bytes: bytes) -> bytes:
+    name_bytes = filename.encode("utf-8")
+    entry = (
+        b"\x0a" + _encode_varint(len(name_bytes)) + name_bytes
+        + b"\x10" + _encode_varint(size)
+        + b"\x1a\x14" + sha1_bytes
+    )
+    return b"\x0a" + _encode_varint(len(entry)) + entry
+
+
 def update_existing_apkg(apkg_path: Path, notes_list: list, tag_str: str, replace_session_tag: bool = True, media_files: list = None):
     """Updates an existing Anki 2.1b (.apkg) file with new notes and optional media."""
+    import hashlib
     with tempfile.TemporaryDirectory() as tmpdir:
         with zipfile.ZipFile(apkg_path, 'r') as z:
             z.extractall(tmpdir)
@@ -368,6 +388,49 @@ def update_existing_apkg(apkg_path: Path, notes_list: list, tag_str: str, replac
             with open(db_path, 'rb') as ifh, open(anki21b_path, 'wb') as ofh:
                 cctx.copy_stream(ifh, ofh)
             os.remove(db_path)
+
+        # Pack any new media files
+        if media_files:
+            media_manifest_path = os.path.join(tmpdir, 'media')
+            existing_indices = [int(f) for f in os.listdir(tmpdir) if f.isdigit()]
+            next_idx = (max(existing_indices) + 1) if existing_indices else 0
+
+            if is_zstd and os.path.exists(media_manifest_path):
+                with open(media_manifest_path, 'rb') as mf:
+                    raw_media = zstd.ZstdDecompressor().stream_reader(mf).read()
+                new_entries = bytearray(raw_media)
+                cctx = zstd.ZstdCompressor(level=3)
+                for mpath in media_files:
+                    mp = Path(mpath)
+                    if not mp.exists():
+                        continue
+                    fname = mp.name
+                    if fname.encode('utf-8') in new_entries:
+                        continue
+                    data = mp.read_bytes()
+                    sha1_digest = hashlib.sha1(data).digest()
+                    new_entries.extend(_encode_media_entry(fname, len(data), sha1_digest))
+                    with open(os.path.join(tmpdir, str(next_idx)), 'wb') as out_f:
+                        out_f.write(cctx.compress(data))
+                    next_idx += 1
+                with open(media_manifest_path, 'wb') as mf:
+                    mf.write(cctx.compress(bytes(new_entries)))
+            else:
+                media_dict = {}
+                if os.path.exists(media_manifest_path):
+                    try:
+                        media_dict = json.loads(Path(media_manifest_path).read_text(encoding='utf-8'))
+                    except Exception:
+                        media_dict = {}
+                existing_names = set(media_dict.values())
+                for mpath in media_files:
+                    mp = Path(mpath)
+                    if not mp.exists() or mp.name in existing_names:
+                        continue
+                    shutil.copyfile(str(mp), os.path.join(tmpdir, str(next_idx)))
+                    media_dict[str(next_idx)] = mp.name
+                    next_idx += 1
+                Path(media_manifest_path).write_text(json.dumps(media_dict), encoding='utf-8')
 
         with zipfile.ZipFile(apkg_path, 'w', zipfile.ZIP_DEFLATED) as zout:
             for root, _, files in os.walk(tmpdir):
