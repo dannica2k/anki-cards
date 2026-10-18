@@ -53,11 +53,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Determine redirect URI (allow override via secret/env or default to production app URL)
-redirect_uri = os.getenv("REDIRECT_URI") or st.secrets.get("REDIRECT_URI", "")
+# Determine redirect URI safely (allow override via secret/env or default to production app URL)
+redirect_uri = google_auth.safe_get_secret("REDIRECT_URI")
 if not redirect_uri:
-    server_addr = st.get_option("browser.serverAddress") or ""
-    if "localhost" in server_addr or server_addr == "127.0.0.1":
+    # Check if running locally vs Streamlit Cloud
+    if os.path.exists("/home/daniel"):
         redirect_uri = "http://localhost:8501/"
     else:
         redirect_uri = "https://mara-anki-studio.streamlit.app/"
@@ -76,18 +76,13 @@ if drive_service and isinstance(user_auth_info, str) and not user_auth_info.star
             del st.session_state["google_creds"]
         st.rerun()
 elif isinstance(user_auth_info, str) and user_auth_info.startswith("http"):
-    st.sidebar.markdown(
-        f'<a href="{user_auth_info}" target="_self" class="google-btn">'
-        '<img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" width="16" style="vertical-align: middle; margin-right: 8px;"/>'
-        'Sign in with Google</a>',
-        unsafe_allow_html=True
-    )
-    st.sidebar.caption("Sign in to sync decks directly to your Google Drive.")
+    st.sidebar.link_button("🔑 Sign in with Google", user_auth_info, use_container_width=True)
+    st.sidebar.caption("Opens Google Sign-In in a new tab to authorize Google Drive sync.")
 else:
     st.sidebar.caption("Google Identity not configured. Add GOOGLE_CLIENT_ID & SECRET to enable.")
 
 # API Key handling
-default_key = os.getenv("GEMINI_API_KEY", "")
+default_key = google_auth.safe_get_secret("GEMINI_API_KEY")
 api_key = st.sidebar.text_input("Gemini API Key", value=default_key, type="password")
 
 # Google Drive Folder ID
