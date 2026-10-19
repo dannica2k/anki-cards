@@ -37,67 +37,38 @@ importlib.reload(google_auth)
 importlib.reload(generator)
 importlib.reload(version)
 
-# Configure Streamlit page (keep sidebar always expanded as a narrow 64px Gmail rail)
+# Configure Streamlit page (auto collapses on mobile, expanded on desktop)
 st.set_page_config(
     page_title="Anki Flashcard Studio",
     page_icon="📇",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="auto"
 )
 
 # Custom CSS:
-# 1. Transform native [data-testid="stSidebar"] into a fixed 64px full-height Gmail-style left rail docked at left=0
-# 2. Hide sidebar collapse/expand buttons and resize handles so it stays a clean static icon bar
-# 3. Scope popover icon styling strictly inside [data-testid="stSidebar"] so main content columns are NEVER affected!
+# 1. Desktop (>=769px): Sleek 64px fixed Gmail-style left icon rail flush with edge
+# 2. Mobile (<=768px): Sidebar tucks cleanly offscreen into a top-left hamburger menu
+# 3. Universal: Hide top-right 3 dots menu (#MainMenu), deploy button, and header chrome
 st.markdown("""
 <style>
+    /* Hide top-right 3 dots menu (#MainMenu), deploy button, and right-side toolbar actions */
+    #MainMenu,
+    [data-testid="stMainMenu"],
+    [data-testid="stMainMenuButton"],
+    [data-testid="stAppDeployButton"],
+    [data-testid="stToolbarActions"],
+    header[data-testid="stHeader"] button[title="View app options"],
+    header[data-testid="stHeader"] button[aria-label="Main menu"] {
+        display: none !important;
+        visibility: hidden !important;
+    }
+    header[data-testid="stHeader"] {
+        background-color: transparent !important;
+    }
+
     /* Hide "Press Enter to apply" tooltip */
     [data-testid="InputInstructions"] {
         display: none !important;
-    }
-
-    /* Transform stSidebar into a 64px full-height Gmail icon rail flush against the left screen edge */
-    section[data-testid="stSidebar"] {
-        width: 64px !important;
-        min-width: 64px !important;
-        max-width: 64px !important;
-        background-color: #f6f8fc !important;
-        border-right: 1px solid #e1e5ea !important;
-        transform: none !important;
-    }
-    section[data-testid="stSidebar"] > div {
-        width: 64px !important;
-        padding: 0 !important;
-    }
-    /* Hide the sidebar collapse button and header spacing */
-    [data-testid="stSidebarCollapseButton"],
-    [data-testid="collapsedControl"],
-    [data-testid="stSidebarHeader"] {
-        display: none !important;
-    }
-    [data-testid="stSidebarUserContent"] {
-        padding: 16px 8px 16px 8px !important;
-        display: flex !important;
-        flex-direction: column !important;
-        align-items: center !important;
-        gap: 10px !important;
-        height: 100vh !important;
-        box-sizing: border-box !important;
-    }
-    .sidebar-version {
-        position: fixed !important;
-        bottom: 14px !important;
-        left: 0 !important;
-        width: 64px !important;
-        font-size: 11px !important;
-        font-weight: 600 !important;
-        color: #9aa0a6 !important;
-        text-align: center !important;
-        white-space: nowrap !important;
-        letter-spacing: 0.2px !important;
-        line-height: 1 !important;
-        user-select: none !important;
-        z-index: 99 !important;
     }
 
     /* Circular icon-only buttons strictly inside the sidebar rail */
@@ -129,25 +100,152 @@ st.markdown("""
         margin: 0 !important;
     }
 
-    /* Main content area padding & typography */
-    .block-container {
-        padding-top: 3.5rem !important;
-        padding-left: 3rem !important;
-        padding-right: 3rem !important;
-        max-width: 1150px !important;
+    /* =========================================================================
+       DESKTOP (>= 769px): Docked 64px Gmail-style left rail
+       ========================================================================= */
+    @media (min-width: 769px) {
+        section[data-testid="stSidebar"] {
+            width: 64px !important;
+            min-width: 64px !important;
+            max-width: 64px !important;
+            background-color: #f6f8fc !important;
+            border-right: 1px solid #e1e5ea !important;
+            transform: none !important;
+        }
+        section[data-testid="stSidebar"] > div {
+            width: 64px !important;
+            padding: 0 !important;
+        }
+        /* Hide collapse toggle on desktop because rail is permanently docked */
+        [data-testid="stSidebarCollapseButton"],
+        [data-testid="collapsedControl"],
+        [data-testid="stExpandSidebarButton"],
+        [data-testid="stSidebarHeader"] {
+            display: none !important;
+            visibility: hidden !important;
+        }
+        [data-testid="stSidebarUserContent"] {
+            padding: 16px 8px 16px 8px !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            gap: 10px !important;
+            height: 100vh !important;
+            box-sizing: border-box !important;
+        }
+        .sidebar-version {
+            position: fixed !important;
+            bottom: 14px !important;
+            left: 0 !important;
+            width: 64px !important;
+            font-size: 11px !important;
+            font-weight: 600 !important;
+            color: #9aa0a6 !important;
+            text-align: center !important;
+            white-space: nowrap !important;
+            letter-spacing: 0.2px !important;
+            line-height: 1 !important;
+            user-select: none !important;
+            z-index: 99 !important;
+        }
+        .block-container {
+            padding-top: 2.2rem !important;
+            padding-left: 3rem !important;
+            padding-right: 3rem !important;
+            max-width: 1150px !important;
+        }
+        .main-title {
+            font-size: 2.1rem;
+            font-weight: 700;
+            color: #1E88E5;
+            margin-top: 0.2rem;
+            margin-bottom: 0.2rem;
+            line-height: 1.3;
+        }
+        .sub-title {
+            font-size: 1.0rem;
+            color: #5f6368;
+            margin-bottom: 1.5rem;
+        }
     }
-    .main-title {
-        font-size: 2.1rem;
-        font-weight: 700;
-        color: #1E88E5;
-        margin-top: 0.2rem;
-        margin-bottom: 0.2rem;
-        line-height: 1.3;
-    }
-    .sub-title {
-        font-size: 1.0rem;
-        color: #5f6368;
-        margin-bottom: 1.5rem;
+
+    /* =========================================================================
+       MOBILE (<= 768px): Tucked slide-over drawer with top-left hamburger menu
+       ========================================================================= */
+    @media (max-width: 768px) {
+        /* When open, slide-over drawer */
+        section[data-testid="stSidebar"] {
+            width: 250px !important;
+            min-width: 250px !important;
+            max-width: 80vw !important;
+            background-color: #f6f8fc !important;
+            border-right: 1px solid #e1e5ea !important;
+            box-shadow: 2px 0 12px rgba(0,0,0,0.15) !important;
+            z-index: 999999 !important;
+        }
+        section[data-testid="stSidebar"] > div {
+            width: 100% !important;
+            padding: 0 !important;
+        }
+        /* Top-left rounded hamburger menu button */
+        [data-testid="collapsedControl"],
+        [data-testid="stExpandSidebarButton"] {
+            display: flex !important;
+            visibility: visible !important;
+            position: fixed !important;
+            top: 10px !important;
+            left: 10px !important;
+            z-index: 1000000 !important;
+            background-color: #ffffff !important;
+            border: 1px solid #dadce0 !important;
+            border-radius: 8px !important;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.12) !important;
+            padding: 4px 6px !important;
+        }
+        [data-testid="stSidebarHeader"] {
+            display: flex !important;
+            padding: 8px 12px !important;
+        }
+        [data-testid="stSidebarCollapseButton"] {
+            display: flex !important;
+        }
+        [data-testid="stSidebarUserContent"] {
+            padding: 12px 16px !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: flex-start !important;
+            gap: 12px !important;
+            height: auto !important;
+        }
+        .sidebar-version {
+            position: static !important;
+            width: 100% !important;
+            margin-top: 2rem !important;
+            font-size: 11px !important;
+            font-weight: 600 !important;
+            color: #9aa0a6 !important;
+            text-align: center !important;
+        }
+        /* Full width content with compact padding */
+        .block-container {
+            padding-top: 3.5rem !important;
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+            max-width: 100% !important;
+        }
+        .main-title {
+            font-size: 1.6rem !important;
+            font-weight: 700;
+            color: #1E88E5;
+            margin-top: 0.2rem;
+            margin-bottom: 0.2rem;
+            line-height: 1.25;
+        }
+        .sub-title {
+            font-size: 0.9rem !important;
+            color: #5f6368;
+            margin-bottom: 1.2rem;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
