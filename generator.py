@@ -382,7 +382,7 @@ Density Setting: {density_mode}
    - Use clean HTML (<b>, <br>) and Unicode symbols (α, β, γ, Δ, ⇌, →, °, ², ⁺). NEVER use LaTeX backslashes.
 """
 
-    models_to_try = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-flash-latest"]
+    models_to_try = ["gemini-3.5-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
 
     for b_idx, batch in enumerate(batches):
         b_target = base_cards_per_batch + (1 if b_idx < extra_cards else 0)
@@ -470,6 +470,9 @@ Slide Content:
             all_notes.extend(batch_notes)
         else:
             print(f"Warning: Batch {b_idx + 1} generation encountered error: {last_err}")
+
+    if not all_notes and last_err:
+        raise RuntimeError(f"Card generation failed: {last_err}")
 
     # Build final deck payload
     return {
