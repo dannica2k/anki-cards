@@ -7,6 +7,10 @@ import os
 import re
 import json
 import time
+import html
+import base64
+import mimetypes
+import urllib.parse
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable
 from pydantic import BaseModel, Field
@@ -33,6 +37,21 @@ class FlashcardDeckPayload(BaseModel):
 
 class BatchCardPayload(BaseModel):
     notes: List[FlashcardNote]
+
+
+class StudyGuideSection(BaseModel):
+    heading: str = Field(description="Clear, numbered section heading covering a core lecture topic or mechanism.")
+    content_markdown: str = Field(description="Thorough, intuitive explanation using GitHub-flavored Markdown (bold key terms, step-by-step causal chains, and comparison tables where helpful). Use Unicode symbols (ΔG′°, α, β, γ, ⇌, →, ⁺, ²⁺) instead of LaTeX backslashes.")
+    figure_filename: str = Field(default="", description="Exact filename of the most relevant extracted slide figure (e.g. 'slide_04_fig_1.png') from the available figures list, or empty string if none applies.")
+    figure_caption: str = Field(default="", description="Concise visual walkthrough explaining how to read the diagram and what exam-relevant features to observe.")
+    exam_takeaways: List[str] = Field(default_factory=list, description="2 to 4 high-yield exam pearls, experimental paradigms, or common exam traps to watch out for.")
+
+
+class StudyGuidePayload(BaseModel):
+    title: str = Field(description="Comprehensive title for the lecture or topic study guide.")
+    executive_summary: str = Field(description="Big-picture synthesis explaining the overarching theme of this lecture/topic and how the mechanisms connect.")
+    sections: List[StudyGuideSection] = Field(description="Ordered, in-depth conceptual sections covering the lecture material.")
+
 
 
 def get_course_rules(course_code: str, base_dir: Path) -> str:
@@ -514,3 +533,611 @@ Slide Content:
         "notes": all_notes,
         "media_files": list(used_media_files)
     }
+
+
+FOOTER_START_MARKER = "<!-- ANKI_STUDIO_FOOTER_START -->"
+FOOTER_END_MARKER = "<!-- ANKI_STUDIO_FOOTER_END -->"
+
+
+def get_study_guide_id(course_code: str, session_num: str) -> str:
+    """Returns canonical study guide identifier (e.g. 'BPK207_Session_2')."""
+    clean_course = re.sub(r'[^A-Za-z0-9]', '', course_code).upper() or "COURSE"
+    clean_session = re.sub(r'[^A-Za-z0-9_-]', '', str(session_num)) or "1"
+    return f"{clean_course}_Session_{clean_session}"
+
+
+def clean_card_text_for_prompt(raw_text: str) -> str:
+    """Strips Anki cloze brackets and HTML tags to yield clean, readable text for a Gemini prompt."""
+    if not raw_text:
+        return ""
+    # Replace {{c1::answer::hint}} or {{c1::answer}} with answer
+    text = re.sub(r'\{\{c\d+::(.*?)(?:::[^}]*)?\}\}', r'\1', raw_text)
+    # Replace <br> with space
+    text = re.sub(r'<br\s*/?>', ' ', text, flags=re.IGNORECASE)
+    # Remove remaining HTML tags
+    text = re.sub(r'<[^>]+>', '', text)
+    # Unescape HTML entities and normalize whitespace
+    text = html.unescape(text)
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def strip_card_footer(extra_html: str) -> str:
+    """Removes the auto-generated Anki Studio footer from a card's extra field if present."""
+    if not extra_html:
+        return ""
+    pattern = re.compile(
+        re.escape(FOOTER_START_MARKER) + r'.*?' + re.escape(FOOTER_END_MARKER),
+        re.DOTALL
+    )
+    cleaned = pattern.sub('', extra_html)
+    return cleaned.strip()
+
+
+def build_ask_gemini_url(
+    front_text: str,
+    extra_text: str = "",
+    course_code: str = "Course",
+    session_num: str = "1"
+) -> str:
+    """
+    Builds a pre-filled Google Search AI Mode (udm=50) URL that immediately explains
+    the specific flashcard concept in detail.
+    """
+    clean_front = clean_card_text_for_prompt(front_text)
+    clean_extra = clean_card_text_for_prompt(strip_card_footer(extra_text))
+
+    prompt = (
+        f"I am studying {course_code} (Session/Chapter {session_num}). "
+        f"Please explain this flashcard concept in detail, including the underlying mechanism, "
+        f"how the components relate, and key exam takeaways: \"{clean_front}\""
+    )
+    if clean_extra and len(clean_extra) < 180:
+        prompt += f" (Context: {clean_extra})"
+
+    if len(prompt) > 750:
+        prompt = prompt[:747] + '..."'
+
+    return f"https://www.google.com/search?udm=50&q={urllib.parse.quote_plus(prompt)}"
+
+
+def build_study_guide_url(
+    course_code: str,
+    session_num: str,
+    app_base_url: str = "https://anki.maranica.com/"
+) -> str:
+    """Builds the deep-link URL to the hosted Supplementary Study Guide inside Anki Flashcard Studio."""
+    guide_id = get_study_guide_id(course_code, session_num)
+    base = app_base_url.rstrip("/")
+    return f"{base}/?guide={urllib.parse.quote(guide_id)}"
+
+
+def build_card_footer_html(
+    front_text: str,
+    extra_text: str,
+    course_code: str,
+    session_num: str,
+    app_base_url: str = "https://anki.maranica.com/"
+) -> str:
+    """Generates the compact HTML footer bar with 'Ask Gemini' and 'Session Study Guide' links."""
+    ask_url = html.escape(build_ask_gemini_url(front_text, extra_text, course_code, session_num), quote=True)
+    guide_url = html.escape(build_study_guide_url(course_code, session_num, app_base_url), quote=True)
+
+    footer_inner = (
+        f'<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(128,128,128,0.25);'
+        f'font-size:0.85em;line-height:1.4;">'
+        f'<a href="{ask_url}" target="_blank" rel="noopener noreferrer" '
+        f'style="color:#1a73e8;text-decoration:none;font-weight:600;margin-right:10px;">'
+        f'💬 Ask Gemini</a>'
+        f'<span style="color:#9aa0a6;margin-right:10px;">•</span>'
+        f'<a href="{guide_url}" target="_blank" rel="noopener noreferrer" '
+        f'style="color:#1a73e8;text-decoration:none;font-weight:600;">'
+        f'📚 Session Study Guide</a>'
+        f'</div>'
+    )
+    return f"{FOOTER_START_MARKER}{footer_inner}{FOOTER_END_MARKER}"
+
+
+def attach_card_footer(
+    front_text: str,
+    extra_html: str,
+    course_code: str,
+    session_num: str,
+    app_base_url: str = "https://anki.maranica.com/"
+) -> str:
+    """Idempotently attaches the fresh 'Ask Gemini' & 'Session Study Guide' footer to a card's extra field."""
+    clean_extra = strip_card_footer(extra_html)
+    footer = build_card_footer_html(front_text, clean_extra, course_code, session_num, app_base_url)
+    if clean_extra:
+        return f"{clean_extra}\n{footer}"
+    return footer
+
+
+def attach_footers_to_notes(
+    notes: List[Dict[str, str]],
+    course_code: str,
+    session_num: str,
+    app_base_url: str = "https://anki.maranica.com/"
+) -> List[Dict[str, str]]:
+    """Returns a copy of notes with the 'Ask Gemini' and 'Session Study Guide' footer embedded in extra."""
+    enriched = []
+    for n in notes:
+        front = n.get("text", "")
+        raw_extra = n.get("extra", "")
+        new_extra = attach_card_footer(front, raw_extra, course_code, session_num, app_base_url)
+        item = dict(n)
+        item["extra"] = new_extra
+        enriched.append(item)
+    return enriched
+
+
+def _encode_image_to_data_uri(img_path: str) -> str:
+    """Encodes a local image file into a self-contained base64 data URI."""
+    if not img_path or not os.path.exists(img_path):
+        return ""
+    try:
+        mime, _ = mimetypes.guess_type(img_path)
+        if not mime:
+            mime = "image/png"
+        raw = Path(img_path).read_bytes()
+        b64 = base64.b64encode(raw).decode("ascii")
+        return f"data:{mime};base64,{b64}"
+    except Exception:
+        return ""
+
+
+def render_study_guide_markdown(guide_data: Dict[str, Any]) -> str:
+    """Converts a StudyGuide dictionary into clean Markdown text."""
+    lines = [
+        f"# 📚 {guide_data.get('title', 'Supplementary Study Guide')}",
+        f"**Course:** {guide_data.get('course_code', '')} • **Session/Chapter:** {guide_data.get('session_num', '')}",
+        "",
+        "## 🎯 Executive Summary",
+        guide_data.get("executive_summary", ""),
+        ""
+    ]
+    for sec in guide_data.get("sections", []):
+        lines.append("---")
+        lines.append(f"## {sec.get('heading', '')}")
+        lines.append("")
+        lines.append(sec.get("content_markdown", ""))
+        lines.append("")
+        if sec.get("figure_filename"):
+            lines.append(f"> 🖼️ **Referenced Slide Figure (`{sec['figure_filename']}`):** {sec.get('figure_caption', '')}")
+            lines.append("")
+        takeaways = sec.get("exam_takeaways", [])
+        if takeaways:
+            lines.append("### ⚡ High-Yield Exam Takeaways")
+            for t in takeaways:
+                lines.append(f"- {t}")
+            lines.append("")
+    return "\n".join(lines)
+
+
+def render_study_guide_html(guide_data: Dict[str, Any], app_base_url: str = "https://anki.maranica.com/") -> str:
+    """
+    Renders a StudyGuide dictionary into a self-contained, responsive HTML document
+    with embedded base64 slide diagrams.
+    """
+    title = html.escape(guide_data.get("title", "Supplementary Study Guide"))
+    course = html.escape(guide_data.get("course_code", ""))
+    session = html.escape(str(guide_data.get("session_num", "")))
+    exec_sum = html.escape(guide_data.get("executive_summary", "")).replace("\n", "<br>")
+
+    def _md_to_basic_html(md_text: str) -> str:
+        """Lightweight markdown-to-HTML converter for paragraphs, bold, lists, and tables."""
+        if not md_text:
+            return ""
+        text = html.escape(md_text)
+        # Bold & Italic
+        text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+        text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
+        text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
+
+        out_lines = []
+        in_list = False
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("- ") or stripped.startswith("* ") or stripped.startswith("• "):
+                if not in_list:
+                    out_lines.append("<ul>")
+                    in_list = True
+                out_lines.append(f"<li>{stripped[2:].strip()}</li>")
+            else:
+                if in_list:
+                    out_lines.append("</ul>")
+                    in_list = False
+                if stripped.startswith("### "):
+                    out_lines.append(f"<h4>{stripped[4:]}</h4>")
+                elif stripped.startswith("## "):
+                    out_lines.append(f"<h3>{stripped[3:]}</h3>")
+                elif stripped == "":
+                    out_lines.append("<br>")
+                else:
+                    out_lines.append(f"<p>{stripped}</p>")
+        if in_list:
+            out_lines.append("</ul>")
+        return "\n".join(out_lines)
+
+    sections_html = []
+    for sec in guide_data.get("sections", []):
+        sec_heading = html.escape(sec.get("heading", ""))
+        sec_body = _md_to_basic_html(sec.get("content_markdown", ""))
+        fig_uri = sec.get("figure_data_uri", "")
+        fig_caption = html.escape(sec.get("figure_caption", ""))
+        fig_name = html.escape(sec.get("figure_filename", ""))
+
+        fig_block = ""
+        if fig_uri:
+            fig_block = f"""
+            <div class="figure-box">
+                <img src="{fig_uri}" alt="{fig_name}" />
+                <div class="figure-caption"><strong>🖼️ Diagram Walkthrough ({fig_name}):</strong> {fig_caption}</div>
+            </div>
+            """
+
+        takeaways = sec.get("exam_takeaways", [])
+        takeaways_block = ""
+        if takeaways:
+            items_html = "".join(f"<li>{_md_to_basic_html(t).replace('<p>', '').replace('</p>', '')}</li>" for t in takeaways)
+            takeaways_block = f"""
+            <div class="takeaways-box">
+                <div class="takeaways-title">⚡ High-Yield Exam Takeaways & Common Traps</div>
+                <ul>{items_html}</ul>
+            </div>
+            """
+
+        sections_html.append(f"""
+        <section class="guide-section">
+            <h2>{sec_heading}</h2>
+            <div class="sec-content">{sec_body}</div>
+            {fig_block}
+            {takeaways_block}
+        </section>
+        """)
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title} — Anki Flashcard Studio</title>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            color: #202124;
+            background-color: #f8f9fa;
+            margin: 0;
+            padding: 24px 16px;
+            line-height: 1.6;
+        }}
+        .container {{
+            max-width: 900px;
+            margin: 0 auto;
+            background: #ffffff;
+            padding: 36px 40px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+        }}
+        .top-bar {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            font-size: 0.9rem;
+        }}
+        .top-bar a {{
+            color: #1a73e8;
+            text-decoration: none;
+            font-weight: 600;
+        }}
+        h1 {{
+            color: #1E88E5;
+            font-size: 1.85rem;
+            margin-top: 0;
+            margin-bottom: 6px;
+        }}
+        .meta {{
+            color: #5f6368;
+            font-size: 0.95rem;
+            margin-bottom: 24px;
+        }}
+        .exec-summary {{
+            background-color: #e8f0fe;
+            border-left: 4px solid #1a73e8;
+            padding: 16px 20px;
+            border-radius: 6px;
+            margin-bottom: 28px;
+        }}
+        .exec-summary-title {{
+            font-weight: 700;
+            color: #174ea6;
+            margin-bottom: 6px;
+        }}
+        .guide-section {{
+            border-top: 1px solid #e1e5ea;
+            padding-top: 24px;
+            margin-top: 24px;
+        }}
+        .guide-section h2 {{
+            color: #202124;
+            font-size: 1.35rem;
+            margin-top: 0;
+        }}
+        .figure-box {{
+            background: #f8f9fa;
+            border: 1px solid #dadce0;
+            border-radius: 8px;
+            padding: 16px;
+            margin: 18px 0;
+            text-align: center;
+        }}
+        .figure-box img {{
+            max-width: 100%;
+            max-height: 420px;
+            border-radius: 4px;
+        }}
+        .figure-caption {{
+            margin-top: 10px;
+            font-size: 0.9rem;
+            color: #3c4043;
+            text-align: left;
+        }}
+        .takeaways-box {{
+            background: #fef7e0;
+            border-left: 4px solid #f9ab00;
+            padding: 14px 18px;
+            border-radius: 6px;
+            margin-top: 16px;
+        }}
+        .takeaways-title {{
+            font-weight: 700;
+            color: #b06000;
+            margin-bottom: 6px;
+        }}
+        code {{
+            background: #f1f3f4;
+            padding: 2px 5px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }}
+        @media (max-width: 600px) {{
+            .container {{ padding: 20px 16px; }}
+            h1 {{ font-size: 1.45rem; }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="top-bar">
+            <span>📇 <strong>Anki Flashcard Studio</strong> • Supplementary Study Guide</span>
+            <a href="{html.escape(app_base_url, quote=True)}">⬅️ Open Studio</a>
+        </div>
+        <h1>📚 {title}</h1>
+        <div class="meta"><strong>Course:</strong> {course} &nbsp;•&nbsp; <strong>Session / Chapter:</strong> {session}</div>
+        <div class="exec-summary">
+            <div class="exec-summary-title">🎯 Big-Picture Synthesis</div>
+            <div>{exec_sum}</div>
+        </div>
+        {"".join(sections_html)}
+    </div>
+</body>
+</html>"""
+
+
+def save_study_guide_files(
+    guide_data: Dict[str, Any],
+    base_dir: Path,
+    app_base_url: str = "https://anki.maranica.com/"
+) -> Dict[str, Path]:
+    """Saves the Study Guide as JSON, self-contained HTML, and Markdown in extracted/study_guides/."""
+    guides_dir = base_dir / "extracted" / "study_guides"
+    guides_dir.mkdir(parents=True, exist_ok=True)
+
+    guide_id = guide_data.get("guide_id") or get_study_guide_id(
+        guide_data.get("course_code", "Course"),
+        guide_data.get("session_num", "1")
+    )
+    guide_data["guide_id"] = guide_id
+
+    json_path = guides_dir / f"{guide_id}_guide.json"
+    html_path = guides_dir / f"{guide_id}_Study_Guide.html"
+    md_path = guides_dir / f"{guide_id}_Study_Guide.md"
+
+    json_path.write_text(json.dumps(guide_data, indent=2), encoding="utf-8")
+    html_path.write_text(render_study_guide_html(guide_data, app_base_url), encoding="utf-8")
+    md_path.write_text(render_study_guide_markdown(guide_data), encoding="utf-8")
+
+    return {
+        "json_path": json_path,
+        "html_path": html_path,
+        "md_path": md_path
+    }
+
+
+def load_local_study_guide(guide_id: str, base_dir: Path) -> Optional[Dict[str, Any]]:
+    """Loads a saved Study Guide JSON by its guide_id if present on disk."""
+    clean_id = re.sub(r'[^A-Za-z0-9_-]', '', guide_id)
+    json_path = base_dir / "extracted" / "study_guides" / f"{clean_id}_guide.json"
+    if json_path.exists():
+        try:
+            return json.loads(json_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+    return None
+
+
+def generate_study_guide(
+    slides_data: List[Dict[str, Any]],
+    course_code: str,
+    session_num: str,
+    custom_focus: str,
+    base_dir: Path,
+    api_key: Optional[str] = None,
+    api_keys_pool: Optional[List[str]] = None,
+    app_base_url: str = "https://anki.maranica.com/",
+    progress_callback: Optional[Callable[[str], None]] = None
+) -> Dict[str, Any]:
+    """
+    Generates an illustrated, multimodal Supplementary Study Guide & Concept Explainer
+    for the lecture (or specific focus topic), embeds extracted slide diagrams as base64,
+    and saves JSON/HTML/MD artifacts.
+    """
+    raw_keys = (api_keys_pool or []) + ([api_key] if api_key else [])
+    if not raw_keys:
+        env_key = os.getenv("GEMINI_API_KEY")
+        if env_key:
+            raw_keys.append(env_key)
+
+    active_keys = []
+    seen = set()
+    for k in raw_keys:
+        if not k:
+            continue
+        clean = k.strip()
+        if not (clean.startswith("AQ.") or clean.startswith("AIzaSy")):
+            clean = f"AQ.{clean}"
+        if clean not in seen:
+            seen.add(clean)
+            active_keys.append(clean)
+
+    if not active_keys:
+        raise ValueError("No Gemini API key available. Please provide an API key in your Google Account profile or Settings.")
+
+    if progress_callback:
+        progress_callback("Synthesizing lecture slides, diagrams, and exam mechanisms...")
+
+    course_rules = get_course_rules(course_code, base_dir)
+    guide_id = get_study_guide_id(course_code, session_num)
+
+    # Assemble lecture text, figure inventory, and representative visual snapshots
+    text_parts = []
+    figure_map: Dict[str, str] = {}
+    visual_snapshots = []
+
+    total_slides = len(slides_data)
+    # Sample up to 10 snapshots evenly so multimodal payload stays fast and within limits
+    step = max(1, total_slides // 10)
+
+    for idx, s in enumerate(slides_data):
+        pno = s["page_num"]
+        text_parts.append(f"\n--- Slide {pno} ---")
+        if s.get("sections"):
+            text_parts.append(f"Sections: {', '.join(s['sections'])}")
+        text_parts.append(s.get("text", ""))
+
+        for fig_p in s.get("figure_paths", []):
+            fname = Path(fig_p).name
+            figure_map[fname] = fig_p
+
+        if idx % step == 0 and len(visual_snapshots) < 10:
+            snap = s.get("snapshot_path")
+            if snap and os.path.exists(snap):
+                try:
+                    visual_snapshots.append(Image.open(snap))
+                except Exception:
+                    pass
+
+    available_figs_str = ", ".join(figure_map.keys()) if figure_map else "None"
+
+    system_instruction = f"""You are a master university professor and study guide author for {course_code} (Session/Chapter {session_num}).
+Your task is to create an illustrated, exam-focused Supplementary Study Guide & Concept Explainer that makes complex mechanisms intuitive, rigorous, and memorable.
+
+### COURSE PEDAGOGICAL PROFILE:
+{course_rules}
+
+### STUDY GUIDE MANDATES:
+1. **Intuitive Causal Explanations**: Don't just list facts—explain *how* and *why* each physiological, anatomical, or biochemical mechanism works step-by-step (e.g. stimulus → receptor transduction → afferent coding → central integration → motor/metabolic output).
+2. **Comparison Tables & Contrasts**: Use Markdown tables or structured bullet comparisons to contrast easily confused pairs (e.g., Utricle vs. Saccule, Muscle Spindle Ia/II vs. GTO Ib, ΔG′° vs. ΔG′).
+3. **Diagram Integration**: Match relevant extracted slide figures from `{available_figs_str}` into `figure_filename` and write a clear `figure_caption` walking the student through what to observe in the diagram.
+4. **High-Yield Exam Takeaways**: Conclude every section with 2–4 concrete exam pearls or common exam traps.
+5. **Formatting**: Use clean GitHub-flavored Markdown and Unicode symbols (ΔG′°, α, β, γ, ⇌, →, ⁺, ²⁺) instead of LaTeX backslashes.
+"""
+
+    focus_instruction = (
+        f"Focus especially on the student's requested topic(s): {custom_focus}"
+        if custom_focus and custom_focus.strip()
+        else "Provide comprehensive coverage across all core testable sections of this lecture."
+    )
+
+    prompt = f"""Create an illustrated Supplementary Study Guide for {course_code} (Session/Chapter {session_num}).
+{focus_instruction}
+
+Available Extracted Slide Figures to reference in `figure_filename`: {available_figs_str}
+
+Lecture Slide Content:
+{chr(10).join(text_parts)}
+"""
+
+    models_to_try = [
+        "gemini-3.5-flash",
+        "gemini-3.7-flash",
+        "gemini-3-flash-preview"
+    ]
+
+    contents = visual_snapshots + [prompt]
+    response = None
+    last_err = None
+
+    for m in models_to_try:
+        for k in active_keys:
+            client = genai.Client(api_key=k)
+            for attempt in range(2):
+                try:
+                    response = client.models.generate_content(
+                        model=m,
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            system_instruction=system_instruction,
+                            response_mime_type="application/json",
+                            response_schema=StudyGuidePayload,
+                            temperature=0.3
+                        )
+                    )
+                    if response and response.text:
+                        break
+                except Exception as e:
+                    last_err = e
+                    err_str = str(e)
+                    if "503" in err_str or "UNAVAILABLE" in err_str:
+                        time.sleep(2.0 * (attempt + 1))
+                        continue
+                    elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                        break
+                    else:
+                        break
+            if response and response.text:
+                break
+        if response and response.text:
+            break
+
+    if not response or not response.text:
+        raise RuntimeError(f"Study Guide generation failed: {last_err}")
+
+    parsed = _safe_parse_json(response.text)
+
+    # Enrich sections with base64 figure data URIs for self-contained persistence
+    enriched_sections = []
+    for sec in parsed.get("sections", []):
+        fig_name = sec.get("figure_filename", "").strip()
+        fig_path = figure_map.get(fig_name, "")
+        if not fig_path and fig_name:
+            cand = base_dir / "extracted" / guide_id / "images" / fig_name
+            if cand.exists():
+                fig_path = str(cand)
+        sec["figure_path"] = fig_path if (fig_path and os.path.exists(fig_path)) else ""
+        sec["figure_data_uri"] = _encode_image_to_data_uri(sec["figure_path"]) if sec["figure_path"] else ""
+        enriched_sections.append(sec)
+
+    guide_data = {
+        "guide_id": guide_id,
+        "title": parsed.get("title", f"{course_code} — Session {session_num} Study Guide"),
+        "course_code": course_code,
+        "session_num": str(session_num),
+        "executive_summary": parsed.get("executive_summary", ""),
+        "sections": enriched_sections,
+        "created_at": int(time.time())
+    }
+
+    save_study_guide_files(guide_data, base_dir, app_base_url=app_base_url)
+    return guide_data
+

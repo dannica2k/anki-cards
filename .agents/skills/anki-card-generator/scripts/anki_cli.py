@@ -168,6 +168,64 @@ def download_drive_file(service, file_id: str, dest_path: Path) -> Path:
     return dest_path
 
 
+def _upsert_drive_file(service, local_path: Path, folder_id: str, mime_type: str = None) -> Dict[str, Any]:
+    """Uploads or updates a file by exact name inside the target Google Drive folder."""
+    fname = local_path.name
+    escaped_name = fname.replace("'", "\\'")
+    query = f"trashed = false and name = '{escaped_name}' and '{folder_id}' in parents"
+    res = service.files().list(q=query, fields="files(id, name, webViewLink)").execute()
+    existing = res.get("files", [])
+
+    media = MediaFileUpload(str(local_path), mimetype=mime_type, resumable=True)
+    if existing:
+        fid = existing[0]["id"]
+        return service.files().update(
+            fileId=fid,
+            media_body=media,
+            fields="id, name, webViewLink"
+        ).execute()
+    else:
+        body = {"name": fname, "parents": [folder_id]}
+        return service.files().create(
+            body=body,
+            media_body=media,
+            fields="id, name, webViewLink"
+        ).execute()
+
+
+def sync_study_guide_to_drive(service, json_path: Path, html_path: Path, folder_id: str = DEFAULT_SHARED_FOLDER_ID) -> Dict[str, Any]:
+    """Uploads or updates both the Study Guide JSON (for app hosting) and HTML (for direct Drive viewing)."""
+    json_meta = _upsert_drive_file(service, json_path, folder_id, mime_type="application/json")
+    html_meta = _upsert_drive_file(service, html_path, folder_id, mime_type="text/html")
+    return {
+        "json_file": json_meta,
+        "html_file": html_meta
+    }
+
+
+def fetch_study_guide_from_drive(service, guide_id: str, base_dir: Path, folder_id: str = DEFAULT_SHARED_FOLDER_ID) -> Optional[Dict[str, Any]]:
+    """Searches Google Drive folder for `<guide_id>_guide.json`, downloads it locally, and returns parsed JSON."""
+    if not service:
+        return None
+    clean_id = re.sub(r'[^A-Za-z0-9_-]', '', guide_id)
+    target_name = f"{clean_id}_guide.json"
+    query = f"trashed = false and name = '{target_name}' and '{folder_id}' in parents"
+    try:
+        res = service.files().list(q=query, fields="files(id, name)").execute()
+        files = res.get("files", [])
+        if not files:
+            return None
+        guides_dir = base_dir / "extracted" / "study_guides"
+        guides_dir.mkdir(parents=True, exist_ok=True)
+        dest_path = guides_dir / target_name
+        download_drive_file(service, files[0]["id"], dest_path)
+        return json.loads(dest_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"Could not fetch study guide {guide_id} from Drive: {e}")
+        return None
+
+
+
 def cmd_inspect(args):
     """Downloads/reads PDF, extracts text + annotations + images, and reports deck status."""
     work_dir = Path(args.workdir).resolve()
@@ -638,6 +696,13 @@ def cmd_sync(args):
     if not notes_list:
         print("Error: No notes found in JSON payload.")
         sys.exit(1)
+
+    try:
+        sys.path.insert(0, str(work_dir))
+        import generator
+        notes_list = generator.attach_footers_to_notes(notes_list, course_display, session_num)
+    except Exception:
+        pass
 
     service = get_drive_service()
     remote_deck = find_course_apkg_on_drive(service, course_compact, course_display, args.folder_id)

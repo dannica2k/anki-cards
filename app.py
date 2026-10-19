@@ -384,9 +384,144 @@ def fetch_drive_pdf(drive_url_str: str):
                 st.session_state["fetch_error"] = "Please log in to your Google Account."
 
 
+def render_study_guide_ui(
+    guide_data: dict,
+    target_folder_id: str,
+    active_drive_service,
+    app_base_url: str,
+    key_prefix: str = "sg"
+):
+    """Renders an interactive Illustrated Study Guide inside Streamlit with HTML/MD export and Drive sync."""
+    guide_id = guide_data.get("guide_id") or generator.get_study_guide_id(
+        guide_data.get("course_code", "Course"),
+        guide_data.get("session_num", "1")
+    )
+    paths = generator.save_study_guide_files(guide_data, BASE_DIR, app_base_url=app_base_url)
+    hosted_url = generator.build_study_guide_url(
+        guide_data.get("course_code", "Course"),
+        guide_data.get("session_num", "1"),
+        app_base_url=app_base_url
+    )
+
+    with st.container(border=True):
+        hdr_c1, hdr_c2 = st.columns([3.5, 1.2], vertical_alignment="center")
+        with hdr_c1:
+            st.markdown(f"### 📚 {guide_data.get('title', 'Supplementary Study Guide')}")
+            st.caption(
+                f"**Course:** {guide_data.get('course_code', '')} • "
+                f"**Session/Chapter:** {guide_data.get('session_num', '')} • "
+                f"🔗 [Hosted App Link (`?guide={guide_id}`)]({hosted_url})"
+            )
+        with hdr_c2:
+            if st.button("☁️ Sync Guide to Drive", key=f"{key_prefix}_sync_btn", use_container_width=True):
+                with st.spinner("Syncing Study Guide to Google Drive..."):
+                    try:
+                        svc = active_drive_service or anki_cli.get_drive_service()
+                        res = anki_cli.sync_study_guide_to_drive(
+                            svc, paths["json_path"], paths["html_path"], folder_id=target_folder_id
+                        )
+                        html_link = res.get("html_file", {}).get("webViewLink", f"https://drive.google.com/drive/folders/{target_folder_id}")
+                        st.success("Synced to Google Drive!")
+                        st.markdown(f"👉 [Open HTML Guide in Drive]({html_link})")
+                    except Exception as e:
+                        st.error(f"Drive sync error: {e}")
+
+        if guide_data.get("executive_summary"):
+            st.info(f"**🎯 Big-Picture Synthesis:**\n\n{guide_data['executive_summary']}")
+
+        for s_idx, sec in enumerate(guide_data.get("sections", [])):
+            st.markdown("---")
+            st.markdown(f"#### {sec.get('heading', f'Section {s_idx + 1}')}")
+            st.markdown(sec.get("content_markdown", ""))
+
+            fig_path = sec.get("figure_path", "")
+            fig_uri = sec.get("figure_data_uri", "")
+            fig_name = sec.get("figure_filename", "")
+            fig_cap = sec.get("figure_caption", "")
+
+            if fig_path and os.path.exists(fig_path):
+                st.image(fig_path, caption=f"🖼️ Diagram Walkthrough ({fig_name}): {fig_cap}", width=480)
+            elif fig_uri:
+                st.markdown(
+                    f'<div style="background:#f8f9fa;border:1px solid #dadce0;border-radius:8px;padding:12px;margin:10px 0;">'
+                    f'<img src="{fig_uri}" style="max-width:100%;max-height:380px;border-radius:4px;" />'
+                    f'<div style="margin-top:8px;font-size:0.88rem;color:#3c4043;">'
+                    f'<strong>🖼️ Diagram Walkthrough ({fig_name}):</strong> {fig_cap}</div></div>',
+                    unsafe_allow_html=True
+                )
+
+            takeaways = sec.get("exam_takeaways", [])
+            if takeaways:
+                takeaways_md = "\n".join([f"- {t}" for t in takeaways])
+                st.warning(f"**⚡ High-Yield Exam Takeaways & Common Traps:**\n{takeaways_md}")
+
+        st.markdown("---")
+        dl_col1, dl_col2 = st.columns([1, 1])
+        with dl_col1:
+            with open(paths["html_path"], "rb") as fh:
+                st.download_button(
+                    label="⬇️ Download Illustrated HTML Guide (.html)",
+                    data=fh.read(),
+                    file_name=paths["html_path"].name,
+                    mime="text/html",
+                    key=f"{key_prefix}_dl_html",
+                    use_container_width=True
+                )
+        with dl_col2:
+            with open(paths["md_path"], "rb") as fm:
+                st.download_button(
+                    label="⬇️ Download Study Guide Markdown (.md)",
+                    data=fm.read(),
+                    file_name=paths["md_path"].name,
+                    mime="text/markdown",
+                    key=f"{key_prefix}_dl_md",
+                    use_container_width=True
+                )
+
+
 # Main Content Area
 st.markdown('<div class="main-title">📇 Anki Flashcard Studio</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-title">Upload course slides or paste a Google Drive link to generate exam-ready Anki Cloze flashcards.</div>', unsafe_allow_html=True)
+
+# Hosted Study Guide Route (?guide=<COURSE>_Session_<N>) linked directly from Anki cards
+requested_guide_id = st.query_params.get("guide")
+if requested_guide_id:
+    nav_c1, nav_c2 = st.columns([4, 1], vertical_alignment="center")
+    with nav_c1:
+        st.caption(f"📖 **Hosted Study Guide View** (`{requested_guide_id}`)")
+    with nav_c2:
+        if st.button("⬅️ Back to Studio", use_container_width=True):
+            st.query_params.pop("guide", None)
+            st.rerun()
+
+    active_svc = None
+    try:
+        active_svc = drive_service or anki_cli.get_drive_service()
+    except Exception:
+        active_svc = None
+
+    loaded_guide = generator.load_local_study_guide(requested_guide_id, BASE_DIR)
+    if not loaded_guide and active_svc:
+        with st.spinner(f"Fetching Study Guide '{requested_guide_id}' from Google Drive..."):
+            loaded_guide = anki_cli.fetch_study_guide_from_drive(
+                active_svc, requested_guide_id, BASE_DIR, folder_id=folder_id
+            )
+
+    if loaded_guide:
+        render_study_guide_ui(
+            loaded_guide,
+            target_folder_id=folder_id,
+            active_drive_service=active_svc,
+            app_base_url=redirect_uri,
+            key_prefix="hosted_sg"
+        )
+    else:
+        st.info(
+            f"📌 **No saved Study Guide found yet for `{requested_guide_id}`.**\n\n"
+            "Load the lecture PDF in the Studio and click **📚 Request Supplementary Study Guide on this Topic** "
+            "to generate and sync it to Google Drive."
+        )
+    st.stop()
 
 # Tabs: Google Drive URL vs File Upload
 tab_drive, tab_upload = st.tabs(["🔗 Paste Google Drive Link", "📄 Upload Lecture PDF"])
@@ -442,6 +577,13 @@ if "uploaded_pdf_path" not in st.session_state and st.query_params.get("test_pdf
         st.session_state["uploaded_pdf_name"] = sample_pdf.name
         st.session_state["inferred_course"] = "BPK 207"
         st.session_state["inferred_session"] = "2"
+
+if "generated_payload" not in st.session_state and st.query_params.get("test_cards"):
+    sample_cards_file = BASE_DIR / "extracted" / "test_preview_cards.json"
+    if sample_cards_file.exists():
+        st.session_state["generated_payload"] = json.loads(sample_cards_file.read_text(encoding="utf-8"))
+        st.session_state["active_course"] = st.session_state["generated_payload"].get("course_display", "BPK 207")
+        st.session_state["active_session"] = st.session_state["generated_payload"].get("session", "2")
 
 uploaded_pdf_path = st.session_state.get("uploaded_pdf_path")
 uploaded_pdf_name = st.session_state.get("uploaded_pdf_name", "")
@@ -611,7 +753,8 @@ if "generated_payload" in st.session_state:
                 front = st.text_area("Front (Cloze Deletions)", value=n.get("text", ""), key=f"front_{idx}", height=120)
 
             with col2:
-                extra = st.text_area("Extra / High-Yield Explanation", value=n.get("extra", ""), key=f"extra_{idx}", height=120)
+                clean_extra_val = generator.strip_card_footer(n.get("extra", ""))
+                extra = st.text_area("Extra / High-Yield Explanation", value=clean_extra_val, key=f"extra_{idx}", height=120)
                 # Live Preview of Embedded Images
                 img_matches = re.findall(r'<img\s+src=[\'"]([^\'"]+)[\'"]', extra)
                 for img_name in img_matches:
@@ -627,6 +770,20 @@ if "generated_payload" in st.session_state:
                     if img_match_path and os.path.exists(img_match_path):
                         st.image(img_match_path, caption=f"Embedded Diagram: {img_name}", width=250)
 
+                # Per-Card AI Tutor & Session Study Guide Links (also auto-embedded into exported .apkg)
+                ask_gemini_href = generator.build_ask_gemini_url(front, extra, active_course, active_session)
+                study_guide_href = generator.build_study_guide_url(active_course, active_session, app_base_url=redirect_uri)
+                st.markdown(
+                    f'<div style="margin-top:4px;font-size:0.84rem;line-height:1.4;">'
+                    f'<a href="{ask_gemini_href}" target="_blank" rel="noopener noreferrer" '
+                    f'style="color:#1a73e8;text-decoration:none;font-weight:600;margin-right:10px;">💬 Ask Gemini</a>'
+                    f'<span style="color:#9aa0a6;margin-right:10px;">•</span>'
+                    f'<a href="{study_guide_href}" target="_blank" rel="noopener noreferrer" '
+                    f'style="color:#1a73e8;text-decoration:none;font-weight:600;">📚 Session Study Guide</a>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+
             edited_notes.append({"text": front, "extra": extra})
 
     if to_delete is not None:
@@ -636,16 +793,90 @@ if "generated_payload" in st.session_state:
 
     payload["notes"] = edited_notes
 
-    # Backlog Feature: Study Guide Request
+    # Supplementary Study Guide Generator & Viewer (Item BL-01)
     st.markdown("---")
-    st.caption("💡 Supplementary Learning Materials")
-    if st.button("📚 Request Supplementary Study Guide on this Topic (Backlog Item BL-01)", use_container_width=True):
-        st.info("📌 **Queued in Backlog (Item BL-01):** The on-demand illustrated Study Guide & Concept Explainer will be available in the upcoming release!")
+    st.markdown("##### 💡 Supplementary Learning Materials")
+    sg_col1, sg_col2 = st.columns([2.2, 1.3], vertical_alignment="bottom")
+    with sg_col1:
+        sg_focus = st.text_input(
+            "Study Guide Focus (Optional — leave blank for full lecture guide)",
+            placeholder="e.g. Explain muscle spindle Ia vs. II coding and reflex pathways in depth",
+            key="sg_focus_input"
+        )
+    with sg_col2:
+        sg_clicked = st.button("📚 Request Supplementary Study Guide on this Topic", use_container_width=True)
 
-    # Action buttons: Download .apkg & Sync to Drive (with full media packing!)
+    active_service = None
+    try:
+        active_service = drive_service or anki_cli.get_drive_service()
+    except Exception:
+        active_service = None
+
+    current_guide_id = generator.get_study_guide_id(active_course, active_session)
+
+    if sg_clicked:
+        if not api_keys_pool:
+            st.error("Please enter a Gemini API Key in your Google Account profile or Settings.")
+        else:
+            sg_status = st.empty()
+            try:
+                # Use slides_data from assessment if loaded, or synthesize from current notes
+                slides_for_sg = []
+                if "pdf_assessment" in st.session_state and st.session_state["pdf_assessment"].get("slides_data"):
+                    slides_for_sg = st.session_state["pdf_assessment"]["slides_data"]
+                else:
+                    slides_for_sg = [{
+                        "page_num": idx + 1,
+                        "text": f"{n.get('text', '')}\n{generator.strip_card_footer(n.get('extra', ''))}",
+                        "sections": [],
+                        "snapshot_path": "",
+                        "figure_paths": media_files if idx == 0 else []
+                    } for idx, n in enumerate(edited_notes)]
+
+                with st.spinner("Generating illustrated Supplementary Study Guide..."):
+                    guide_payload = generator.generate_study_guide(
+                        slides_data=slides_for_sg,
+                        course_code=active_course,
+                        session_num=active_session,
+                        custom_focus=sg_focus,
+                        base_dir=BASE_DIR,
+                        api_keys_pool=api_keys_pool,
+                        app_base_url=redirect_uri,
+                        progress_callback=lambda m: sg_status.info(f"📖 {m}")
+                    )
+                    st.session_state["active_study_guide"] = guide_payload
+                    sg_paths = generator.save_study_guide_files(guide_payload, BASE_DIR, app_base_url=redirect_uri)
+                    if active_service:
+                        try:
+                            anki_cli.sync_study_guide_to_drive(
+                                active_service, sg_paths["json_path"], sg_paths["html_path"], folder_id=folder_id
+                            )
+                        except Exception:
+                            pass
+                    sg_status.success("🎉 Supplementary Study Guide generated and ready!")
+            except Exception as e:
+                sg_status.error(f"❌ Study Guide generation failed: {e}")
+
+    # Load existing or newly generated Study Guide for this session if available
+    active_guide = st.session_state.get("active_study_guide")
+    if not active_guide or active_guide.get("guide_id") != current_guide_id:
+        active_guide = generator.load_local_study_guide(current_guide_id, BASE_DIR)
+        if active_guide:
+            st.session_state["active_study_guide"] = active_guide
+
+    if active_guide and active_guide.get("guide_id") == current_guide_id:
+        with st.expander(f"📖 View Illustrated Study Guide: {active_guide.get('title', current_guide_id)}", expanded=True):
+            render_study_guide_ui(
+                active_guide,
+                target_folder_id=folder_id,
+                active_drive_service=active_service,
+                app_base_url=redirect_uri,
+                key_prefix="inline_sg"
+            )
+
+    # Action buttons: Download .apkg & Sync to Drive (with full media packing + Ask Gemini / Study Guide links!)
     st.markdown("---")
 
-    active_service = drive_service or anki_cli.get_drive_service()
     course_compact = active_course.replace(" ", "")
     work_dir = BASE_DIR / "extracted"
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -664,13 +895,22 @@ if "generated_payload" in st.session_state:
     master_export_path = work_dir / canonical_file_name
     tag_str = payload.get("tag", f"#{course_compact}::Session::{active_session}")
 
+    # Attach '💬 Ask Gemini' and '📚 Session Study Guide' links to every card's extra field for Anki export
+    export_app_url = "https://anki.maranica.com/" if "localhost" not in redirect_uri else redirect_uri
+    notes_with_links = generator.attach_footers_to_notes(
+        edited_notes,
+        course_code=active_course,
+        session_num=active_session,
+        app_base_url=export_app_url
+    )
+
     # Build the updated package (master or new)
     if baseline_apkg and os.path.exists(str(baseline_apkg)):
         if Path(baseline_apkg).resolve() != master_export_path.resolve():
             shutil.copyfile(str(baseline_apkg), str(master_export_path))
         tot_notes, tot_cards = anki_cli.update_existing_apkg(
             master_export_path,
-            edited_notes,
+            notes_with_links,
             tag_str,
             media_files=media_files
         )
@@ -678,14 +918,14 @@ if "generated_payload" in st.session_state:
         anki_cli.create_new_apkg(
             master_export_path,
             canonical_deck_name,
-            edited_notes,
+            notes_with_links,
             tag_str,
             media_files=media_files
         )
-        tot_notes = len(edited_notes)
+        tot_notes = len(notes_with_links)
         tot_cards = tot_notes
 
-    st.caption(f"🎯 **Target Anki Deck:** `{canonical_deck_name}` • Master Archive: `{canonical_file_name}` ({tot_notes} notes)")
+    st.caption(f"🎯 **Target Anki Deck:** `{canonical_deck_name}` • Master Archive: `{canonical_file_name}` ({tot_notes} notes, with `💬 Ask Gemini` & `📚 Session Study Guide` embedded)")
 
     btn_col1, btn_col2 = st.columns([1, 1])
 
@@ -707,6 +947,13 @@ if "generated_payload" in st.session_state:
                         ).execute()
                         st.success(f"Created and uploaded '{canonical_file_name}' to Google Drive! (Total Notes: {tot_notes})")
 
+                    # Also sync Study Guide if generated for this session
+                    if active_guide and active_guide.get("guide_id") == current_guide_id:
+                        sg_paths = generator.save_study_guide_files(active_guide, BASE_DIR, app_base_url=export_app_url)
+                        anki_cli.sync_study_guide_to_drive(
+                            active_service, sg_paths["json_path"], sg_paths["html_path"], folder_id=folder_id
+                        )
+
                     st.markdown(f"👉 [Open Target Google Drive Folder](https://drive.google.com/drive/folders/{folder_id})")
                 except Exception as e:
                     st.error(f"Sync error: {e}")
@@ -721,3 +968,4 @@ if "generated_payload" in st.session_state:
                 use_container_width=True,
                 help=f"Internal Anki Deck Name: '{canonical_deck_name}'. Importing into Anki updates this deck in place without duplicates!"
             )
+
