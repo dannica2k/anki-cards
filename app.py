@@ -291,7 +291,16 @@ with st.sidebar:
                 google_auth.clear_cached_creds()
                 st.rerun()
         elif isinstance(user_auth_info, str) and user_auth_info.startswith("http"):
-            st.link_button("🔑 Sign in with Google", user_auth_info, use_container_width=True)
+            st.markdown(
+                f'<a href="{user_auth_info}" target="_self" '
+                f'style="display:inline-flex;align-items:center;justify-content:center;width:100%;'
+                f'padding:0.45rem 0.75rem;margin-bottom:0.5rem;background-color:#ffffff;color:#31333F;'
+                f'border:1px solid rgba(49,51,63,0.2);border-radius:0.5rem;'
+                f'text-decoration:none;font-weight:500;font-size:0.95rem;'
+                f'box-shadow:0 1px 2px rgba(0,0,0,0.04);">'
+                f'🔑 Sign in with Google</a>',
+                unsafe_allow_html=True
+            )
             st.caption("Sign in to fetch private files and sync decks to Google Drive.")
         else:
             st.caption("Add GOOGLE_CLIENT_ID & GOOGLE_CLIENT_SECRET to enable Google Sign-In.")
