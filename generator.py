@@ -421,10 +421,10 @@ Density Setting: {density_mode}
 """
 
     models_to_try = [
-        "gemini-3-flash-preview",  # Tier 1: High-capacity multimodal Flash (no 503 spikes)
-        "gemini-3.5-flash",        # Tier 2: Full 3.5 Flash
-        "gemini-3.5-flash-lite",   # Tier 3: Ultra-stable, fast 3.5 Flash Lite
-        "gemini-3.1-flash-lite"    # Tier 4: Rock-solid backup Lite tier
+        "gemini-3.5-flash",        # Tier 1: Primary flagship 3.5 Flash
+        "gemini-3-flash-preview",  # Tier 2: Full Gemini 3 Flash
+        "gemini-3.5-flash-lite",   # Tier 3: High-quota, zero-503 3.5 Flash Lite
+        "gemini-3.1-flash-lite"    # Tier 4: Backup high-quota Lite tier
     ]
 
     for b_idx, batch in enumerate(batches):
@@ -969,6 +969,51 @@ def load_local_study_guide(guide_id: str, base_dir: Path) -> Optional[Dict[str, 
     return None
 
 
+def _group_slides_by_subsections(
+    slides_data: List[Dict[str, Any]],
+    max_subsections_per_batch: int = 3,
+    max_slides_per_batch: int = 5
+) -> List[Dict[str, Any]]:
+    """
+    Groups slides into batches covering 3–4 detected sub-sections (or up to 5 slides
+    when no numbered sub-sections are present).
+    """
+    batches = []
+    cur_slides = []
+    cur_sections = []
+
+    for s in slides_data:
+        s_secs = [sec for sec in s.get("sections", []) if sec not in cur_sections]
+        would_exceed_secs = (len(cur_sections) + len(s_secs) > max_subsections_per_batch) and len(cur_slides) > 0
+        would_exceed_slides = len(cur_slides) >= max_slides_per_batch
+
+        if would_exceed_secs or would_exceed_slides:
+            batches.append({
+                "slides": cur_slides,
+                "subsections": cur_sections,
+                "start_slide": cur_slides[0]["page_num"],
+                "end_slide": cur_slides[-1]["page_num"]
+            })
+            cur_slides = []
+            cur_sections = []
+            s_secs = list(s.get("sections", []))
+
+        cur_slides.append(s)
+        for sec in s_secs:
+            if sec not in cur_sections:
+                cur_sections.append(sec)
+
+    if cur_slides:
+        batches.append({
+            "slides": cur_slides,
+            "subsections": cur_sections,
+            "start_slide": cur_slides[0]["page_num"],
+            "end_slide": cur_slides[-1]["page_num"]
+        })
+
+    return batches
+
+
 def generate_study_guide(
     slides_data: List[Dict[str, Any]],
     course_code: str,
@@ -978,12 +1023,16 @@ def generate_study_guide(
     api_key: Optional[str] = None,
     api_keys_pool: Optional[List[str]] = None,
     app_base_url: str = "https://anki.maranica.com/",
-    progress_callback: Optional[Callable[[str], None]] = None
+    progress_callback: Optional[Callable[..., None]] = None
 ) -> Dict[str, Any]:
     """
-    Generates an illustrated, multimodal Supplementary Study Guide & Concept Explainer
-    for the lecture (or specific focus topic), embeds extracted slide diagrams as base64,
-    and saves JSON/HTML/MD artifacts.
+    Generates an illustrated, multimodal Supplementary Study Guide & Concept Explainer:
+    1. Builds a consolidated `<guide_id>_header.md` file (course rules, sub-section roadmap,
+       figure inventory, and slide text) and uploads it once to the Gemini File API (`file_uri`).
+    2. Processes the lecture in batches of 3–4 detected sub-sections using full Flash models
+       (`gemini-3.5-flash` -> `gemini-3-flash-preview` -> `gemini-3.7-flash`), passing the
+       lightweight `file_uri` reference instead of a massive inline prompt.
+    3. Merges all sections, embeds extracted slide figures as base64 data URIs, and saves JSON/HTML/MD.
     """
     raw_keys = (api_keys_pool or []) + ([api_key] if api_key else [])
     if not raw_keys:
@@ -1006,130 +1055,206 @@ def generate_study_guide(
     if not active_keys:
         raise ValueError("No Gemini API key available. Please provide an API key in your Google Account profile or Settings.")
 
-    if progress_callback:
-        progress_callback("Synthesizing lecture slides, diagrams, and exam mechanisms...")
+    def _notify(batch_idx: int, total_batches: int, msg: str):
+        if not progress_callback:
+            return
+        try:
+            progress_callback(batch_idx, total_batches, msg)
+        except TypeError:
+            progress_callback(msg)
 
     course_rules = get_course_rules(course_code, base_dir)
     guide_id = get_study_guide_id(course_code, session_num)
 
-    # Assemble lecture text, figure inventory, and representative visual snapshots
-    text_parts = []
+    # 1. Build figure inventory and consolidated Header Reference Markdown (.md)
     figure_map: Dict[str, str] = {}
-    visual_snapshots = []
+    all_detected_sections = []
+    header_md_lines = [
+        f"# Lecture Reference Header: {course_code} (Session/Chapter {session_num})",
+        "",
+        "## 1. Course Pedagogical Profile & Rules",
+        course_rules,
+        "",
+        "## 2. Slide-by-Slide Lecture Content & Figure Inventory"
+    ]
 
-    total_slides = len(slides_data)
-    # Sample up to 4 lightweight thumbnails so multimodal payload stays fast and never triggers 503s
-    step = max(1, total_slides // 4)
-
-    for idx, s in enumerate(slides_data):
+    for s in slides_data:
         pno = s["page_num"]
-        text_parts.append(f"\n--- Slide {pno} ---")
-        if s.get("sections"):
-            text_parts.append(f"Sections: {', '.join(s['sections'])}")
-        text_parts.append(s.get("text", ""))
+        s_secs = s.get("sections", [])
+        for sec in s_secs:
+            if sec not in all_detected_sections:
+                all_detected_sections.append(sec)
 
+        s_figs = []
         for fig_p in s.get("figure_paths", []):
             fname = Path(fig_p).name
             figure_map[fname] = fig_p
+            s_figs.append(fname)
 
-        if idx % step == 0 and len(visual_snapshots) < 4:
-            snap = s.get("snapshot_path")
-            if snap and os.path.exists(snap):
-                try:
-                    im = Image.open(snap).copy()
-                    im.thumbnail((768, 768))
-                    visual_snapshots.append(im)
-                except Exception:
-                    pass
+        header_md_lines.append(f"\n### Slide {pno}")
+        if s_secs:
+            header_md_lines.append(f"- **Detected Sub-Sections:** {', '.join(s_secs)}")
+        if s_figs:
+            header_md_lines.append(f"- **Extracted Slide Figures:** {', '.join(s_figs)}")
+        header_md_lines.append(s.get("text", ""))
 
     available_figs_str = ", ".join(figure_map.keys()) if figure_map else "None"
+    guides_dir = base_dir / "extracted" / "study_guides"
+    guides_dir.mkdir(parents=True, exist_ok=True)
+    header_md_path = guides_dir / f"{guide_id}_header.md"
+    header_md_path.write_text("\n".join(header_md_lines), encoding="utf-8")
+
+    # Group slides into batches of 3–4 detected sub-sections
+    batches = _group_slides_by_subsections(slides_data, max_subsections_per_batch=3, max_slides_per_batch=5)
+    num_batches = max(1, len(batches))
 
     system_instruction = f"""You are a master university professor and study guide author for {course_code} (Session/Chapter {session_num}).
 Your task is to create an illustrated, exam-focused Supplementary Study Guide & Concept Explainer that makes complex mechanisms intuitive, rigorous, and memorable.
 
-### COURSE PEDAGOGICAL PROFILE:
-{course_rules}
-
 ### STUDY GUIDE MANDATES:
-1. **Intuitive Causal Explanations**: Don't just list facts—explain *how* and *why* each physiological, anatomical, or biochemical mechanism works step-by-step (e.g. stimulus → receptor transduction → afferent coding → central integration → motor/metabolic output).
+1. **Intuitive Causal Explanations**: Explain *how* and *why* each physiological, anatomical, or biochemical mechanism works step-by-step (e.g. stimulus → receptor transduction → afferent coding → central integration → motor/metabolic output).
 2. **Comparison Tables & Contrasts**: Use Markdown tables or structured bullet comparisons to contrast easily confused pairs (e.g., Utricle vs. Saccule, Muscle Spindle Ia/II vs. GTO Ib, ΔG′° vs. ΔG′).
 3. **Diagram Integration**: Match relevant extracted slide figures from `{available_figs_str}` into `figure_filename` and write a clear `figure_caption` walking the student through what to observe in the diagram.
 4. **High-Yield Exam Takeaways**: Conclude every section with 2–4 concrete exam pearls or common exam traps.
 5. **Formatting**: Use clean GitHub-flavored Markdown and Unicode symbols (ΔG′°, α, β, γ, ⇌, →, ⁺, ²⁺) instead of LaTeX backslashes.
 """
 
-    focus_instruction = (
-        f"Focus especially on the student's requested topic(s): {custom_focus}"
-        if custom_focus and custom_focus.strip()
-        else "Provide comprehensive coverage across all core testable sections of this lecture."
-    )
-
-    prompt = f"""Create an illustrated Supplementary Study Guide for {course_code} (Session/Chapter {session_num}).
-{focus_instruction}
-
-Available Extracted Slide Figures to reference in `figure_filename`: {available_figs_str}
-
-Lecture Slide Content:
-{chr(10).join(text_parts)}
-"""
-
     models_to_try = [
-        "gemini-3-flash-preview",  # Tier 1: High-capacity multimodal Flash (no 503 spikes)
-        "gemini-3.5-flash",        # Tier 2: Full 3.5 Flash
-        "gemini-3.5-flash-lite",   # Tier 3: Ultra-stable, fast 3.5 Flash Lite
-        "gemini-3.1-flash-lite"    # Tier 4: Rock-solid backup Lite tier
+        "gemini-3.5-flash",        # Tier 1: Primary flagship 3.5 Flash
+        "gemini-3-flash-preview",  # Tier 2: Full Gemini 3 Flash
+        "gemini-3.5-flash-lite",   # Tier 3: High-quota, zero-503 3.5 Flash Lite
+        "gemini-3.1-flash-lite"    # Tier 4: Backup high-quota Lite tier
     ]
 
-    contents_options = [visual_snapshots + [prompt], [prompt]] if visual_snapshots else [[prompt]]
-    response = None
+    uploaded_refs: Dict[str, Any] = {}
+    guide_title = f"{course_code} — Session {session_num} Study Guide"
+    executive_summary = ""
+    all_sections = []
     last_err = None
 
-    for contents in contents_options:
-        for m in models_to_try:
-            model_503 = False
-            for k in active_keys:
-                client = genai.Client(api_key=k)
-                try:
-                    response = client.models.generate_content(
-                        model=m,
-                        contents=contents,
-                        config=types.GenerateContentConfig(
-                            system_instruction=system_instruction,
-                            response_mime_type="application/json",
-                            response_schema=StudyGuidePayload,
-                            temperature=0.3
+    try:
+        for b_idx, batch in enumerate(batches):
+            start_s = batch["start_slide"]
+            end_s = batch["end_slide"]
+            sub_secs = batch["subsections"]
+
+            if sub_secs:
+                sec_label = ", ".join(sub_secs[:3])
+                msg = f"Batch {b_idx + 1}/{num_batches}: Generating Study Guide for Sub-sections {sec_label} (Slides {start_s}–{end_s})..."
+            else:
+                msg = f"Batch {b_idx + 1}/{num_batches}: Generating Study Guide for Slides {start_s}–{end_s}..."
+            _notify(b_idx + 1, num_batches, msg)
+
+            # Collect up to 2 lightweight thumbnails for this batch's slides
+            batch_thumbs = []
+            batch_figs = []
+            for s in batch["slides"]:
+                for fp in s.get("figure_paths", []):
+                    batch_figs.append(Path(fp).name)
+                if len(batch_thumbs) < 2:
+                    snap = s.get("snapshot_path")
+                    if snap and os.path.exists(snap):
+                        try:
+                            im = Image.open(snap).copy()
+                            im.thumbnail((768, 768))
+                            batch_thumbs.append(im)
+                        except Exception:
+                            pass
+
+            focus_clause = (
+                f"\nStudent Custom Focus Request: {custom_focus}"
+                if custom_focus and custom_focus.strip()
+                else ""
+            )
+            subsec_clause = (
+                f"Detected Sub-Sections in this batch: {', '.join(sub_secs)}"
+                if sub_secs
+                else f"Slides in this batch: {start_s} to {end_s}"
+            )
+            figs_clause = (
+                f"Extracted figures on these slides (use in `figure_filename`): {', '.join(batch_figs)}"
+                if batch_figs
+                else f"Available lecture figures: {available_figs_str}"
+            )
+
+            batch_prompt = (
+                f"Referencing the uploaded Lecture Reference Header (.md), generate the in-depth Study Guide sections "
+                f"specifically covering Slides {start_s}–{end_s}.\n"
+                f"- {subsec_clause}\n"
+                f"- {figs_clause}"
+                f"{focus_clause}\n"
+                f"Write 2 to 3 thorough, exam-grade `sections` covering all mechanisms and concepts in Slides {start_s}–{end_s}."
+            )
+
+            response = None
+            for m in models_to_try:
+                model_503 = False
+                for k in active_keys:
+                    client = genai.Client(api_key=k)
+                    try:
+                        # Upload the .md header file once per API key and reuse its HTTPS file_uri reference
+                        if k not in uploaded_refs:
+                            uploaded_refs[k] = client.files.upload(
+                                file=str(header_md_path),
+                                config={"mime_type": "text/markdown"}
+                            )
+                        file_ref = uploaded_refs[k]
+                        contents = [file_ref] + batch_thumbs + [batch_prompt]
+
+                        response = client.models.generate_content(
+                            model=m,
+                            contents=contents,
+                            config=types.GenerateContentConfig(
+                                system_instruction=system_instruction,
+                                response_mime_type="application/json",
+                                response_schema=StudyGuidePayload,
+                                temperature=0.3
+                            )
                         )
-                    )
-                    if response and response.text:
-                        break
-                except Exception as e:
-                    last_err = e
-                    err_str = str(e)
-                    if "503" in err_str or "UNAVAILABLE" in err_str:
-                        # 503 is model-wide high demand -> immediately switch to next model tier
-                        model_503 = True
-                        break
-                    elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                        # Quota reached on this key -> try next key in pool
-                        continue
-                    else:
-                        break
+                        if response and response.text:
+                            break
+                    except Exception as e:
+                        last_err = e
+                        err_str = str(e)
+                        if "503" in err_str or "UNAVAILABLE" in err_str:
+                            model_503 = True
+                            break
+                        elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                            continue
+                        else:
+                            break
+                if response and response.text:
+                    break
+                if model_503:
+                    continue
+
             if response and response.text:
-                break
-            if model_503:
-                continue
-        if response and response.text:
-            break
+                parsed = _safe_parse_json(response.text)
+                if b_idx == 0:
+                    guide_title = parsed.get("title") or guide_title
+                    executive_summary = parsed.get("executive_summary") or executive_summary
+                batch_sections = parsed.get("sections", [])
+                all_sections.extend(batch_sections)
+            else:
+                print(f"Warning: Study Guide batch {b_idx + 1} encountered error: {last_err}")
+    finally:
+        # Clean up uploaded remote header files from Gemini File API
+        for k, ref in uploaded_refs.items():
+            try:
+                genai.Client(api_key=k).files.delete(name=ref.name)
+            except Exception:
+                pass
 
-
-    if not response or not response.text:
+    if not all_sections:
         raise RuntimeError(f"Study Guide generation failed: {last_err}")
-
-    parsed = _safe_parse_json(response.text)
 
     # Enrich sections with base64 figure data URIs for self-contained persistence
     enriched_sections = []
-    for sec in parsed.get("sections", []):
+    for s_idx, sec in enumerate(all_sections):
+        # Ensure clean sequential numbering if multiple batches generated headings
+        raw_heading = re.sub(r'^\d+[\.\)]\s*', '', sec.get("heading", "").strip())
+        sec["heading"] = f"{s_idx + 1}. {raw_heading}" if raw_heading else f"Section {s_idx + 1}"
+
         fig_name = sec.get("figure_filename", "").strip()
         fig_path = figure_map.get(fig_name, "")
         if not fig_path and fig_name:
@@ -1142,14 +1267,15 @@ Lecture Slide Content:
 
     guide_data = {
         "guide_id": guide_id,
-        "title": parsed.get("title", f"{course_code} — Session {session_num} Study Guide"),
+        "title": guide_title,
         "course_code": course_code,
         "session_num": str(session_num),
-        "executive_summary": parsed.get("executive_summary", ""),
+        "executive_summary": executive_summary,
         "sections": enriched_sections,
         "created_at": int(time.time())
     }
 
     save_study_guide_files(guide_data, base_dir, app_base_url=app_base_url)
     return guide_data
+
 

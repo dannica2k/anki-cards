@@ -818,7 +818,17 @@ if "generated_payload" in st.session_state:
         if not api_keys_pool:
             st.error("Please enter a Gemini API Key in your Google Account profile or Settings.")
         else:
+            sg_prog = st.progress(0)
             sg_status = st.empty()
+
+            def on_sg_progress(batch_num, total_batches, msg=None):
+                if msg is None:
+                    sg_status.info(f"📖 {batch_num}")
+                else:
+                    frac = batch_num / max(total_batches, 1)
+                    sg_prog.progress(frac)
+                    sg_status.info(f"📖 {msg}")
+
             try:
                 # Use slides_data from assessment if loaded, or synthesize from current notes
                 slides_for_sg = []
@@ -833,27 +843,27 @@ if "generated_payload" in st.session_state:
                         "figure_paths": media_files if idx == 0 else []
                     } for idx, n in enumerate(edited_notes)]
 
-                with st.spinner("Generating illustrated Supplementary Study Guide..."):
-                    guide_payload = generator.generate_study_guide(
-                        slides_data=slides_for_sg,
-                        course_code=active_course,
-                        session_num=active_session,
-                        custom_focus=sg_focus,
-                        base_dir=BASE_DIR,
-                        api_keys_pool=api_keys_pool,
-                        app_base_url=redirect_uri,
-                        progress_callback=lambda m: sg_status.info(f"📖 {m}")
-                    )
-                    st.session_state["active_study_guide"] = guide_payload
-                    sg_paths = generator.save_study_guide_files(guide_payload, BASE_DIR, app_base_url=redirect_uri)
-                    if active_service:
-                        try:
-                            anki_cli.sync_study_guide_to_drive(
-                                active_service, sg_paths["json_path"], sg_paths["html_path"], folder_id=folder_id
-                            )
-                        except Exception:
-                            pass
-                    sg_status.success("🎉 Supplementary Study Guide generated and ready!")
+                guide_payload = generator.generate_study_guide(
+                    slides_data=slides_for_sg,
+                    course_code=active_course,
+                    session_num=active_session,
+                    custom_focus=sg_focus,
+                    base_dir=BASE_DIR,
+                    api_keys_pool=api_keys_pool,
+                    app_base_url=redirect_uri,
+                    progress_callback=on_sg_progress
+                )
+                st.session_state["active_study_guide"] = guide_payload
+                sg_paths = generator.save_study_guide_files(guide_payload, BASE_DIR, app_base_url=redirect_uri)
+                if active_service:
+                    try:
+                        anki_cli.sync_study_guide_to_drive(
+                            active_service, sg_paths["json_path"], sg_paths["html_path"], folder_id=folder_id
+                        )
+                    except Exception:
+                        pass
+                sg_prog.progress(1.0)
+                sg_status.success(f"🎉 Supplementary Study Guide generated ({len(guide_payload.get('sections', []))} sections) and ready!")
             except Exception as e:
                 sg_status.error(f"❌ Study Guide generation failed: {e}")
 
