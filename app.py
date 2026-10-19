@@ -174,6 +174,21 @@ with st.sidebar:
         st.markdown("##### 👤 Google Account")
         if is_logged_in:
             st.success(f"Signed in as:\n**{user_auth_info}**")
+            # User profile preferences
+            user_profile = google_auth.get_user_profile(user_auth_info)
+            saved_key = user_profile.get("personal_gemini_api_key", "")
+            user_key_input = st.text_input(
+                "Personal Gemini API Key",
+                value=saved_key,
+                type="password",
+                help="Optional personal key. Used first before falling back to the project backup key."
+            )
+            if user_key_input != saved_key:
+                norm_key = google_auth.normalize_gemini_api_key(user_key_input)
+                user_profile["personal_gemini_api_key"] = norm_key
+                google_auth.save_user_profile(user_auth_info, user_profile)
+                st.toast("Personal Gemini key saved to profile!", icon="✅")
+            st.caption("Your personal key is used first. If quota is exhausted, it automatically falls back to the project backup key.")
             if st.button("Log out", use_container_width=True):
                 google_auth.clear_cached_creds()
                 st.rerun()
@@ -187,11 +202,21 @@ with st.sidebar:
     with st.popover("", icon=":material/settings:", help="Settings"):
         st.markdown("##### ⚙️ Settings")
         default_key = google_auth.safe_get_secret("GEMINI_API_KEY")
-        api_key = st.text_input("Gemini API Key", value=default_key, type="password")
+        fallback_key = st.text_input("Project Backup Gemini API Key", value=default_key, type="password", help="Backup key used if a user's personal key is not set or exhausted.")
         folder_id = st.text_input("Target Google Drive Folder ID", value=anki_cli.DEFAULT_SHARED_FOLDER_ID)
 
     # 3. Bottom version label
     st.markdown(f'<div class="sidebar-version">{version.__version__}</div>', unsafe_allow_html=True)
+
+# Resolve active API keys pool (User Personal Key -> Project Backup Key)
+user_personal_key = ""
+if is_logged_in:
+    u_prof = google_auth.get_user_profile(user_auth_info)
+    user_personal_key = u_prof.get("personal_gemini_api_key", "")
+
+project_backup_key = fallback_key or google_auth.safe_get_secret("GEMINI_API_KEY")
+api_keys_pool = [k for k in [user_personal_key, project_backup_key] if k]
+api_key = api_keys_pool[0] if api_keys_pool else ""
 
 
 def fetch_drive_pdf(drive_url_str: str):
@@ -409,8 +434,8 @@ if uploaded_pdf_path and os.path.exists(uploaded_pdf_path):
     generate_clicked = st.button("✨ Generate Anki Flashcards", type="primary", use_container_width=True)
 
     if generate_clicked:
-        if not api_key:
-            st.error("Please click the ⚙️ Settings icon on the left rail and enter a Gemini API Key.")
+        if not api_keys_pool:
+            st.error("Please enter a Gemini API Key in your Google Account profile or Settings.")
         else:
             prog_bar = st.progress(0)
             status_box = st.empty()
@@ -429,16 +454,30 @@ if uploaded_pdf_path and os.path.exists(uploaded_pdf_path):
                     target_count=int(target_count),
                     custom_guidance=custom_guidance,
                     base_dir=BASE_DIR,
-                    api_key=api_key,
+                    api_keys_pool=api_keys_pool,
                     progress_callback=on_progress
                 )
-                st.session_state["generated_payload"] = payload
-                st.session_state["active_course"] = selected_course
-                st.session_state["active_session"] = session_num
-                prog_bar.progress(1.0)
-                status_box.success(f"🎉 Successfully generated {len(payload.get('notes', []))} exam-ready notes!")
+                generated_notes = payload.get("notes", [])
+                if not generated_notes:
+                    status_box.warning("⚠️ Generation completed, but no flashcards were returned. Please check your guidance prompt or lecture slides.")
+                else:
+                    st.session_state["generated_payload"] = payload
+                    st.session_state["active_course"] = selected_course
+                    st.session_state["active_session"] = session_num
+                    prog_bar.progress(1.0)
+                    status_box.success(f"🎉 Successfully generated {len(generated_notes)} exam-ready notes!")
             except Exception as e:
-                status_box.error(f"Generation failed: {e}")
+                err_text = str(e)
+                if "429" in err_text or "RESOURCE_EXHAUSTED" in err_text:
+                    status_box.error(
+                        "🛑 **Gemini API Quota Exceeded**: All configured API keys (personal and project backup) have reached their daily request limit.\n\n"
+                        "- Free-tier quotas automatically reset every 24 hours.\n"
+                        "- You can attach a payment method to your [Google AI Studio](https://aistudio.google.com/) account for unlimited usage, or enter a fresh key in your Google Account profile."
+                    )
+                elif "503" in err_text or "UNAVAILABLE" in err_text:
+                    status_box.error("🌐 **Google API High Demand (503)**: Google's AI servers are temporarily experiencing a traffic spike. Please wait a few seconds and click Generate again.")
+                else:
+                    status_box.error(f"❌ **Generation failed**: {err_text}")
 
 # Review & Edit Generated Cards
 if "generated_payload" in st.session_state:

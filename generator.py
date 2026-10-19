@@ -282,6 +282,7 @@ def generate_cards_chunked(
     custom_guidance: str,
     base_dir: Path,
     api_key: Optional[str] = None,
+    api_keys_pool: Optional[List[str]] = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None
 ) -> Dict[str, Any]:
     """
@@ -290,12 +291,30 @@ def generate_cards_chunked(
     - Enforces the Mandatory Testing Mandate (no hiding core facts in extra)
     - Enforces Hierarchical Spaced-Repetition (Parent list card + Child deep-dive cards)
     - Embeds extracted slide figures into the extra field
+    - Automatically fails over across user personal keys, project keys, and model tiers
     - Returns a merged deck payload with packed media
     """
-    if not api_key:
-        api_key = os.getenv("GEMINI_API_KEY")
+    raw_keys = (api_keys_pool or []) + ([api_key] if api_key else [])
+    if not raw_keys:
+        env_key = os.getenv("GEMINI_API_KEY")
+        if env_key:
+            raw_keys.append(env_key)
 
-    client = genai.Client(api_key=api_key)
+    active_keys = []
+    seen = set()
+    for k in raw_keys:
+        if not k:
+            continue
+        clean = k.strip()
+        if not (clean.startswith("AQ.") or clean.startswith("AIzaSy")):
+            clean = f"AQ.{clean}"
+        if clean not in seen:
+            seen.add(clean)
+            active_keys.append(clean)
+
+    if not active_keys:
+        raise ValueError("No Gemini API key available. Please provide an API key in your Google Account profile or Settings.")
+
     course_rules = get_course_rules(course_code, base_dir)
     course_compact = course_code.replace(" ", "")
     unit_type = "Chapter" if "::Chapter::" in course_rules else "Session"
@@ -382,7 +401,11 @@ Density Setting: {density_mode}
    - Use clean HTML (<b>, <br>) and Unicode symbols (α, β, γ, Δ, ⇌, →, °, ², ⁺). NEVER use LaTeX backslashes.
 """
 
-    models_to_try = ["gemini-3.5-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+    models_to_try = [
+        "gemini-3.5-flash",       # Tier 1: Primary - stable, fast, high quota, full multimodal quality
+        "gemini-3.7-flash",       # Tier 2: Advanced multimodal vision fallback
+        "gemini-3-flash-preview"  # Tier 3: High-capacity preview fallback
+    ]
 
     for b_idx, batch in enumerate(batches):
         b_target = base_cards_per_batch + (1 if b_idx < extra_cards else 0)
@@ -433,34 +456,41 @@ Slide Content:
 {chr(10).join(batch_text_parts)}
 """
 
-        # Call Gemini with images + prompt
+        # Call Gemini with images + prompt across model cascade and active keys
         contents = batch_images + [batch_prompt]
         response = None
         last_err = None
 
         for m in models_to_try:
-            for attempt in range(2):
-                try:
-                    response = client.models.generate_content(
-                        model=m,
-                        contents=contents,
-                        config=types.GenerateContentConfig(
-                            system_instruction=system_instruction,
-                            response_mime_type="application/json",
-                            response_schema=BatchCardPayload,
-                            temperature=0.25
+            for k in active_keys:
+                client = genai.Client(api_key=k)
+                for attempt in range(2):
+                    try:
+                        response = client.models.generate_content(
+                            model=m,
+                            contents=contents,
+                            config=types.GenerateContentConfig(
+                                system_instruction=system_instruction,
+                                response_mime_type="application/json",
+                                response_schema=BatchCardPayload,
+                                temperature=0.25
+                            )
                         )
-                    )
-                    if response and response.text:
-                        break
-                except Exception as e:
-                    last_err = e
-                    err_str = str(e)
-                    if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
-                        time.sleep(2.0 * (attempt + 1))
-                        continue
-                    else:
-                        break
+                        if response and response.text:
+                            break
+                    except Exception as e:
+                        last_err = e
+                        err_str = str(e)
+                        if "503" in err_str or "UNAVAILABLE" in err_str:
+                            time.sleep(2.0 * (attempt + 1))
+                            continue
+                        elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                            # Quota reached on this key -> switch to next key or model
+                            break
+                        else:
+                            break
+                if response and response.text:
+                    break
             if response and response.text:
                 break
 

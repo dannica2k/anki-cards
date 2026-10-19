@@ -173,3 +173,52 @@ def init_google_auth(redirect_uri: str):
         include_granted_scopes='true'
     )
     return None, auth_url
+
+
+def normalize_gemini_api_key(key: str) -> str:
+    """Ensures Gemini API key is properly trimmed and prefixed with AQ. if required."""
+    if not key:
+        return ""
+    clean = key.strip()
+    if clean.startswith("AQ.") or clean.startswith("AIzaSy"):
+        return clean
+    return f"AQ.{clean}"
+
+
+def get_user_profile(email: str) -> dict:
+    """Loads user profile preferences (like personal Gemini API key) from disk."""
+    if not email:
+        return {}
+    TOKEN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    norm_email = email.lower().strip()
+    sid = hashlib.sha256(norm_email.encode("utf-8")).hexdigest()[:16]
+    profile_file = TOKEN_CACHE_DIR / f"{sid}_profile.json"
+    data = {}
+    if profile_file.exists():
+        try:
+            data = json.loads(profile_file.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    if not data.get("personal_gemini_api_key"):
+        # Auto-associate pre-configured environment keys for designated family accounts
+        if "maranica" in norm_email:
+            env_k = safe_get_secret("MARA_GEMINI_API_KEY")
+            if env_k:
+                data["personal_gemini_api_key"] = normalize_gemini_api_key(env_k)
+        elif "dannica" in norm_email:
+            env_k = safe_get_secret("DANIEL_GEMINI_API_KEY") or safe_get_secret("GEMINI_API_KEY")
+            if env_k:
+                data["personal_gemini_api_key"] = normalize_gemini_api_key(env_k)
+    return data
+
+
+def save_user_profile(email: str, profile_data: dict):
+    """Saves user profile preferences to disk."""
+    if not email:
+        return
+    TOKEN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    norm_email = email.lower().strip()
+    sid = hashlib.sha256(norm_email.encode("utf-8")).hexdigest()[:16]
+    profile_file = TOKEN_CACHE_DIR / f"{sid}_profile.json"
+    profile_file.write_text(json.dumps(profile_data, indent=2), encoding="utf-8")
+
