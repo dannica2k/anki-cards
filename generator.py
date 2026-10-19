@@ -738,8 +738,36 @@ def render_study_guide_html(guide_data: Dict[str, Any], app_base_url: str = "htt
 
         out_lines = []
         in_list = False
+        in_table = False
+        table_header_done = False
+
         for line in text.splitlines():
             stripped = line.strip()
+            # Table rows
+            if stripped.startswith("|") and stripped.endswith("|") and len(stripped) > 2:
+                if in_list:
+                    out_lines.append("</ul>")
+                    in_list = False
+                cells = [c.strip() for c in stripped.strip("|").split("|")]
+                # Skip markdown separator row |---|---|
+                if all(re.match(r'^:?-{2,}:?$', c) for c in cells if c):
+                    continue
+                if not in_table:
+                    out_lines.append("<table>")
+                    in_table = True
+                    table_header_done = False
+                if not table_header_done:
+                    out_lines.append("<thead><tr>" + "".join(f"<th>{c}</th>" for c in cells) + "</tr></thead><tbody>")
+                    table_header_done = True
+                else:
+                    out_lines.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
+                continue
+            else:
+                if in_table:
+                    out_lines.append("</tbody></table>")
+                    in_table = False
+                    table_header_done = False
+
             if stripped.startswith("- ") or stripped.startswith("* ") or stripped.startswith("• "):
                 if not in_list:
                     out_lines.append("<ul>")
@@ -749,7 +777,9 @@ def render_study_guide_html(guide_data: Dict[str, Any], app_base_url: str = "htt
                 if in_list:
                     out_lines.append("</ul>")
                     in_list = False
-                if stripped.startswith("### "):
+                if stripped.startswith("#### "):
+                    out_lines.append(f"<h4>{stripped[5:]}</h4>")
+                elif stripped.startswith("### "):
                     out_lines.append(f"<h4>{stripped[4:]}</h4>")
                 elif stripped.startswith("## "):
                     out_lines.append(f"<h3>{stripped[3:]}</h3>")
@@ -759,6 +789,8 @@ def render_study_guide_html(guide_data: Dict[str, Any], app_base_url: str = "htt
                     out_lines.append(f"<p>{stripped}</p>")
         if in_list:
             out_lines.append("</ul>")
+        if in_table:
+            out_lines.append("</tbody></table>")
         return "\n".join(out_lines)
 
     sections_html = []
@@ -866,6 +898,21 @@ def render_study_guide_html(guide_data: Dict[str, Any], app_base_url: str = "htt
             font-size: 1.35rem;
             margin-top: 0;
         }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin: 14px 0;
+            font-size: 0.92rem;
+        }}
+        th, td {{
+            border: 1px solid #dadce0;
+            padding: 8px 12px;
+            text-align: left;
+        }}
+        th {{
+            background-color: #f1f3f4;
+            font-weight: 600;
+        }}
         .figure-box {{
             background: #f8f9fa;
             border: 1px solid #dadce0;
@@ -927,12 +974,40 @@ def render_study_guide_html(guide_data: Dict[str, Any], app_base_url: str = "htt
 </html>"""
 
 
+def render_study_guide_pdf(
+    guide_data: Dict[str, Any],
+    pdf_path: Path,
+    app_base_url: str = "https://anki.maranica.com/"
+) -> Path:
+    """
+    Renders the Study Guide (including embedded base64 slide diagrams and tables)
+    directly to a multi-page Letter PDF using PyMuPDF Story.
+    """
+    html_str = render_study_guide_html(guide_data, app_base_url=app_base_url)
+    # Strip multi-byte color emojis that standard PDF fonts lack
+    for emoji_char in ["📇 ", "⬅️ ", "📚 ", "🎯 ", "🖼️ ", "⚡ "]:
+        html_str = html_str.replace(emoji_char, "")
+
+    mediabox = pymupdf.paper_rect("letter")
+    where = mediabox + (36, 36, -36, -36)
+    story = pymupdf.Story(html=html_str)
+    writer = pymupdf.DocumentWriter(str(pdf_path))
+    more = True
+    while more:
+        dev = writer.begin_page(mediabox)
+        more, _ = story.place(where)
+        story.draw(dev)
+        writer.end_page()
+    writer.close()
+    return pdf_path
+
+
 def save_study_guide_files(
     guide_data: Dict[str, Any],
     base_dir: Path,
     app_base_url: str = "https://anki.maranica.com/"
 ) -> Dict[str, Path]:
-    """Saves the Study Guide as JSON, self-contained HTML, and Markdown in extracted/study_guides/."""
+    """Saves the Study Guide as JSON, self-contained HTML, PDF, and Markdown in extracted/study_guides/."""
     guides_dir = base_dir / "extracted" / "study_guides"
     guides_dir.mkdir(parents=True, exist_ok=True)
 
@@ -944,17 +1019,24 @@ def save_study_guide_files(
 
     json_path = guides_dir / f"{guide_id}_guide.json"
     html_path = guides_dir / f"{guide_id}_Study_Guide.html"
+    pdf_path = guides_dir / f"{guide_id}_Study_Guide.pdf"
     md_path = guides_dir / f"{guide_id}_Study_Guide.md"
 
     json_path.write_text(json.dumps(guide_data, indent=2), encoding="utf-8")
     html_path.write_text(render_study_guide_html(guide_data, app_base_url), encoding="utf-8")
     md_path.write_text(render_study_guide_markdown(guide_data), encoding="utf-8")
+    try:
+        render_study_guide_pdf(guide_data, pdf_path, app_base_url=app_base_url)
+    except Exception as e:
+        print(f"Warning: could not render PDF for study guide: {e}")
 
     return {
         "json_path": json_path,
         "html_path": html_path,
+        "pdf_path": pdf_path,
         "md_path": md_path
     }
+
 
 
 def load_local_study_guide(guide_id: str, base_dir: Path) -> Optional[Dict[str, Any]]:

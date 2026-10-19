@@ -193,13 +193,18 @@ def _upsert_drive_file(service, local_path: Path, folder_id: str, mime_type: str
         ).execute()
 
 
-def sync_study_guide_to_drive(service, json_path: Path, html_path: Path, folder_id: str = DEFAULT_SHARED_FOLDER_ID) -> Dict[str, Any]:
-    """Uploads or updates both the Study Guide JSON (for app hosting) and HTML (for direct Drive viewing)."""
+def sync_study_guide_to_drive(service, json_path: Path, html_path: Path, folder_id: str = DEFAULT_SHARED_FOLDER_ID, pdf_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Uploads or updates the Study Guide JSON (for app hosting), HTML, and PDF (for direct Drive viewing)."""
     json_meta = _upsert_drive_file(service, json_path, folder_id, mime_type="application/json")
     html_meta = _upsert_drive_file(service, html_path, folder_id, mime_type="text/html")
+    pdf_candidate = pdf_path or html_path.with_suffix(".pdf")
+    pdf_meta = None
+    if pdf_candidate and pdf_candidate.exists():
+        pdf_meta = _upsert_drive_file(service, pdf_candidate, folder_id, mime_type="application/pdf")
     return {
         "json_file": json_meta,
-        "html_file": html_meta
+        "html_file": html_meta,
+        "pdf_file": pdf_meta
     }
 
 

@@ -468,15 +468,17 @@ def render_study_guide_ui(
                     use_container_width=True
                 )
         with dl_col2:
-            with open(paths["md_path"], "rb") as fm:
-                st.download_button(
-                    label="⬇️ Download Study Guide Markdown (.md)",
-                    data=fm.read(),
-                    file_name=paths["md_path"].name,
-                    mime="text/markdown",
-                    key=f"{key_prefix}_dl_md",
-                    use_container_width=True
-                )
+            pdf_target = paths.get("pdf_path")
+            if pdf_target and pdf_target.exists():
+                with open(pdf_target, "rb") as fp:
+                    st.download_button(
+                        label="⬇️ Download Study Guide PDF (.pdf)",
+                        data=fp.read(),
+                        file_name=pdf_target.name,
+                        mime="application/pdf",
+                        key=f"{key_prefix}_dl_pdf",
+                        use_container_width=True
+                    )
 
 
 # Main Content Area
