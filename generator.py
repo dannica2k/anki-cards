@@ -421,9 +421,10 @@ Density Setting: {density_mode}
 """
 
     models_to_try = [
-        "gemini-3.5-flash",       # Tier 1: Primary - stable, fast, high quota, full multimodal quality
-        "gemini-3.7-flash",       # Tier 2: Advanced multimodal vision fallback
-        "gemini-3-flash-preview"  # Tier 3: High-capacity preview fallback
+        "gemini-3-flash-preview",  # Tier 1: High-capacity multimodal Flash (no 503 spikes)
+        "gemini-3.5-flash",        # Tier 2: Full 3.5 Flash
+        "gemini-3.5-flash-lite",   # Tier 3: Ultra-stable, fast 3.5 Flash Lite
+        "gemini-3.1-flash-lite"    # Tier 4: Rock-solid backup Lite tier
     ]
 
     for b_idx, batch in enumerate(batches):
@@ -481,37 +482,39 @@ Slide Content:
         last_err = None
 
         for m in models_to_try:
+            model_503 = False
             for k in active_keys:
                 client = genai.Client(api_key=k)
-                for attempt in range(2):
-                    try:
-                        response = client.models.generate_content(
-                            model=m,
-                            contents=contents,
-                            config=types.GenerateContentConfig(
-                                system_instruction=system_instruction,
-                                response_mime_type="application/json",
-                                response_schema=BatchCardPayload,
-                                temperature=0.25
-                            )
+                try:
+                    response = client.models.generate_content(
+                        model=m,
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            system_instruction=system_instruction,
+                            response_mime_type="application/json",
+                            response_schema=BatchCardPayload,
+                            temperature=0.25
                         )
-                        if response and response.text:
-                            break
-                    except Exception as e:
-                        last_err = e
-                        err_str = str(e)
-                        if "503" in err_str or "UNAVAILABLE" in err_str:
-                            time.sleep(2.0 * (attempt + 1))
-                            continue
-                        elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                            # Quota reached on this key -> switch to next key or model
-                            break
-                        else:
-                            break
-                if response and response.text:
-                    break
+                    )
+                    if response and response.text:
+                        break
+                except Exception as e:
+                    last_err = e
+                    err_str = str(e)
+                    if "503" in err_str or "UNAVAILABLE" in err_str:
+                        # 503 is model-wide high demand -> immediately switch to next model tier
+                        model_503 = True
+                        break
+                    elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                        # Quota reached on this key -> try next key in pool
+                        continue
+                    else:
+                        break
             if response and response.text:
                 break
+            if model_503:
+                continue
+
 
         if response and response.text:
             parsed = _safe_parse_json(response.text)
@@ -1015,8 +1018,8 @@ def generate_study_guide(
     visual_snapshots = []
 
     total_slides = len(slides_data)
-    # Sample up to 10 snapshots evenly so multimodal payload stays fast and within limits
-    step = max(1, total_slides // 10)
+    # Sample up to 4 lightweight thumbnails so multimodal payload stays fast and never triggers 503s
+    step = max(1, total_slides // 4)
 
     for idx, s in enumerate(slides_data):
         pno = s["page_num"]
@@ -1029,11 +1032,13 @@ def generate_study_guide(
             fname = Path(fig_p).name
             figure_map[fname] = fig_p
 
-        if idx % step == 0 and len(visual_snapshots) < 10:
+        if idx % step == 0 and len(visual_snapshots) < 4:
             snap = s.get("snapshot_path")
             if snap and os.path.exists(snap):
                 try:
-                    visual_snapshots.append(Image.open(snap))
+                    im = Image.open(snap).copy()
+                    im.thumbnail((768, 768))
+                    visual_snapshots.append(im)
                 except Exception:
                     pass
 
@@ -1069,19 +1074,21 @@ Lecture Slide Content:
 """
 
     models_to_try = [
-        "gemini-3.5-flash",
-        "gemini-3.7-flash",
-        "gemini-3-flash-preview"
+        "gemini-3-flash-preview",  # Tier 1: High-capacity multimodal Flash (no 503 spikes)
+        "gemini-3.5-flash",        # Tier 2: Full 3.5 Flash
+        "gemini-3.5-flash-lite",   # Tier 3: Ultra-stable, fast 3.5 Flash Lite
+        "gemini-3.1-flash-lite"    # Tier 4: Rock-solid backup Lite tier
     ]
 
-    contents = visual_snapshots + [prompt]
+    contents_options = [visual_snapshots + [prompt], [prompt]] if visual_snapshots else [[prompt]]
     response = None
     last_err = None
 
-    for m in models_to_try:
-        for k in active_keys:
-            client = genai.Client(api_key=k)
-            for attempt in range(2):
+    for contents in contents_options:
+        for m in models_to_try:
+            model_503 = False
+            for k in active_keys:
+                client = genai.Client(api_key=k)
                 try:
                     response = client.models.generate_content(
                         model=m,
@@ -1099,16 +1106,21 @@ Lecture Slide Content:
                     last_err = e
                     err_str = str(e)
                     if "503" in err_str or "UNAVAILABLE" in err_str:
-                        time.sleep(2.0 * (attempt + 1))
-                        continue
-                    elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                        # 503 is model-wide high demand -> immediately switch to next model tier
+                        model_503 = True
                         break
+                    elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                        # Quota reached on this key -> try next key in pool
+                        continue
                     else:
                         break
             if response and response.text:
                 break
+            if model_503:
+                continue
         if response and response.text:
             break
+
 
     if not response or not response.text:
         raise RuntimeError(f"Study Guide generation failed: {last_err}")
