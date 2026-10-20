@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<!-- Modal Injection Slot -->
+<div id="modal-container-slot"></div>
+
+<!-- =========================================================================
+     DESKTOP NAVIGATION RAIL (>= 769px): Docked 64px Gmail-Style
+     ========================================================================= -->
+<aside class="hidden md:flex flex-col items-center justify-between w-16 h-screen fixed left-0 top-0 bg-[#F6F8FC] border-r border-[#E1E5EA] py-4 z-40">
+  <!-- Top Icons -->
+  <div class="flex flex-col items-center gap-3 w-full">
+    <!-- App Logo Icon -->
+    <div class="w-10 h-10 rounded-full bg-brandLight text-brand flex items-center justify-center text-xl font-bold shadow-xs mb-2">
+      📇
+    </div>
+
+    <!-- Account Profile Icon -->
+    <button hx-get="/api/modal/account" hx-target="#modal-container-slot" title="Google Account Profile"
+            class="w-11 h-11 rounded-full flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-[#E1E5EA] transition">
+      <span class="material-symbols-outlined text-[26px]">account_circle</span>
+    </button>
+
+    <!-- Settings Icon -->
+    <button hx-get="/api/modal/settings" hx-target="#modal-container-slot" title="Project Settings"
+            class="w-11 h-11 rounded-full flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-[#E1E5EA] transition">
+      <span class="material-symbols-outlined text-[26px]">settings</span>
+    </button>
+
+    <!-- Study Guides Library Icon -->
+    <button hx-get="/api/modal/guides" hx-target="#modal-container-slot" title="Study Guides Library"
+            class="w-11 h-11 rounded-full flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-[#E1E5EA] transition">
+      <span class="material-symbols-outlined text-[26px]">auto_stories</span>
+    </button>
+
+    <!-- Manage Courses Icon -->
+    <button hx-get="/api/modal/courses" hx-target="#modal-container-slot" title="Manage Courses"
+            class="w-11 h-11 rounded-full flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-[#E1E5EA] transition">
+      <span class="material-symbols-outlined text-[26px]">school</span>
+    </button>
+  </div>
+
+  <!-- Bottom Pinned Version -->
+  <div class="text-[11px] font-semibold text-slate-400 select-none pb-1">
+    {{ version }}
+  </div>
+</aside>
+
+<!-- =========================================================================
+     MOBILE TOP BAR & SLIDE-OVER DRAWER (<= 768px)
+     ========================================================================= -->
+<!-- Mobile Top Header Bar -->
+<header class="md:hidden fixed top-0 left-0 right-0 h-14 bg-white border-b border-slate-200 px-4 flex items-center justify-between z-30 shadow-xs">
+  <div class="flex items-center gap-2.5">
+    <!-- Hamburger Toggle Button -->
+    <button onclick="toggleMobileDrawer(true)" class="p-2 -ml-1 text-slate-700 hover:bg-slate-100 rounded-lg transition">
+      <span class="material-symbols-outlined text-2xl">menu</span>
+    </button>
+    <div class="font-bold text-slate-800 text-base flex items-center gap-1.5">
+      <span>📇</span>
+      <span>Anki Flashcard Studio</span>
+    </div>
+  </div>
+  <span class="text-xs font-semibold text-slate-400 font-mono">{{ version }}</span>
+</header>
+
+<!-- Mobile Drawer Backdrop & Menu -->
+<div id="mobile-drawer-backdrop" onclick="toggleMobileDrawer(false)" 
+     class="md:hidden fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-40 hidden transition-opacity duration-200 opacity-0"></div>
+
+<aside id="mobile-drawer" 
+       class="md:hidden fixed top-0 left-0 bottom-0 w-64 bg-white z-50 transform -translate-x-full drawer-transition shadow-2xl flex flex-col justify-between p-5">
+  <div>
+    <div class="flex items-center justify-between pb-4 border-b border-slate-100 mb-4">
+      <div class="flex items-center gap-2">
+        <span class="text-2xl">📇</span>
+        <span class="font-bold text-slate-800">Menu</span>
+      </div>
+      <button onclick="toggleMobileDrawer(false)" class="p-1 text-slate-400 hover:text-slate-600 rounded-lg">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+
+    <nav class="space-y-1.5">
+      <button onclick="toggleMobileDrawer(false)" hx-get="/api/modal/account" hx-target="#modal-container-slot"
+              class="w-full flex items-center gap-3 px-3.5 py-2.5 text-slate-700 hover:bg-slate-100 rounded-xl text-sm font-medium transition text-left">
+        <span class="material-symbols-outlined text-brand">account_circle</span>
+        <span>Google Account Profile</span>
+      </button>
+
+      <button onclick="toggleMobileDrawer(false)" hx-get="/api/modal/settings" hx-target="#modal-container-slot"
+              class="w-full flex items-center gap-3 px-3.5 py-2.5 text-slate-700 hover:bg-slate-100 rounded-xl text-sm font-medium transition text-left">
+        <span class="material-symbols-outlined text-slate-600">settings</span>
+        <span>Project Settings</span>
+      </button>
+
+      <button onclick="toggleMobileDrawer(false)" hx-get="/api/modal/guides" hx-target="#modal-container-slot"
+              class="w-full flex items-center gap-3 px-3.5 py-2.5 text-slate-700 hover:bg-slate-100 rounded-xl text-sm font-medium transition text-left">
+        <span class="material-symbols-outlined text-teal-600">auto_stories</span>
+        <span>Study Guides Library</span>
+      </button>
+
+      <button onclick="toggleMobileDrawer(false)" hx-get="/api/modal/courses" hx-target="#modal-container-slot"
+              class="w-full flex items-center gap-3 px-3.5 py-2.5 text-slate-700 hover:bg-slate-100 rounded-xl text-sm font-medium transition text-left">
+        <span class="material-symbols-outlined text-indigo-600">school</span>
+        <span>Manage Courses</span>
+      </button>
+    </nav>
+  </div>
+
+  <div class="pt-4 border-t border-slate-100 text-center text-xs text-slate-400 font-mono">
+    Version {{ version }} • FastAPI + HTMX
+  </div>
+</aside>
+
+<!-- =========================================================================
+     MAIN APPLICATION WORKSPACE
+     ========================================================================= -->
+<main class="flex-1 md:pl-16 pt-16 md:pt-6 pb-32 px-4 sm:px-8 max-w-7xl mx-auto w-full">
+
+  <!-- Header Title -->
+  <div class="mb-6">
+    <h1 class="text-2xl sm:text-3xl font-extrabold text-[#1E88E5] tracking-tight flex items-center gap-2">
+      <span>📇</span>
+      <span>Anki Flashcard Studio</span>
+    </h1>
+    <p class="text-sm sm:text-base text-slate-500 mt-1">
+      Upload course slides or paste a Google Drive link to generate exam-ready Anki Cloze flashcards & study guides.
+    </p>
+  </div>
+
+  <!-- Source Input Tabs Card -->
+  <div class="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden mb-6">
+    <!-- Tab Navigation -->
+    <div class="flex border-b border-slate-200 bg-slate-50/60 text-sm font-medium">
+      <button id="tab-btn-drive" onclick="switchTab('drive')" 
+              class="flex-1 sm:flex-none px-6 py-3.5 flex items-center justify-center gap-2 border-b-2 border-brand text-brand font-semibold transition">
+        <span class="material-symbols-outlined text-lg">link</span>
+        <span>Paste Google Drive Link</span>
+      </button>
+      <button id="tab-btn-upload" onclick="switchTab('upload')" 
+              class="flex-1 sm:flex-none px-6 py-3.5 flex items-center justify-center gap-2 border-b-2 border-transparent text-slate-500 hover:text-slate-800 transition">
+        <span class="material-symbols-outlined text-lg">upload_file</span>
+        <span>Upload Lecture PDF</span>
+      </button>
+    </div>
+
+    <!-- Tab Contents -->
+    <div class="p-6">
+      <!-- Drive Link Tab Pane -->
+      <div id="tab-pane-drive" class="space-y-3">
+        <label class="text-xs font-semibold text-slate-600 uppercase tracking-wider block">Google Drive PDF Link or ID</label>
+        <form hx-post="/api/drive/fetch" hx-target="#preview-area" hx-indicator="#global-spinner" class="flex flex-col sm:flex-row gap-3">
+          <input type="text" name="drive_url" required placeholder="Paste link here (e.g. https://drive.google.com/file/d/...)" 
+                 class="flex-1 px-4 py-2.5 text-sm rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-brand/40 focus:border-brand">
+          <button type="submit" 
+                  class="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-medium text-sm rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 shrink-0">
+            <span class="material-symbols-outlined text-lg">cloud_download</span>
+            <span>Fetch from Drive</span>
+          </button>
+        </form>
+      </div>
+
+      <!-- PDF File Upload Tab Pane -->
+      <div id="tab-pane-upload" class="hidden space-y-3">
+        <label class="text-xs font-semibold text-slate-600 uppercase tracking-wider block">Select Lecture PDF</label>
+        <form id="upload-form" hx-post="/api/upload" hx-target="#preview-area" hx-indicator="#global-spinner" enctype="multipart/form-data" class="space-y-3">
+          <label for="file-input" 
+                 id="drop-zone"
+                 ondragover="event.preventDefault(); this.classList.add('border-brand', 'bg-blue-50/30');"
+                 ondragleave="this.classList.remove('border-brand', 'bg-blue-50/30');"
+                 ondrop="handleFileDrop(event)"
+                 class="block border-2 border-dashed border-slate-300 hover:border-brand/80 rounded-2xl p-6 text-center cursor-pointer transition bg-slate-50/50 hover:bg-blue-50/20">
+            <input type="file" id="file-input" name="file" accept=".pdf" class="hidden" 
+                   onchange="if(this.files.length) htmx.trigger(document.getElementById('upload-form'), 'submit');">
+            <span class="material-icons text-4xl text-slate-400 mb-1">cloud_upload</span>
+            <p class="text-sm font-medium text-slate-700">Click to browse or drop a lecture PDF here</p>
+            <p class="text-xs text-slate-400 mt-0.5">Supports PDF slides up to 100MB</p>
+          </label>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dynamic Content Area -->
+  <div id="preview-area" class="mb-6">{{ test_pdf_html | safe if test_pdf_html else "" }}</div>
+  <div id="generation-area" class="mb-6">{{ test_cards_html | safe if test_cards_html else "" }}</div>
+
+</main>
+
+<!-- Vanilla JS for Instant Drawer & Tab Switching -->
+<script>
+  function switchTab(tab) {
+    const isDrive = tab === 'drive';
+    document.getElementById('tab-pane-drive').classList.toggle('hidden', !isDrive);
+    document.getElementById('tab-pane-upload').classList.toggle('hidden', isDrive);
+
+    const btnDrive = document.getElementById('tab-btn-drive');
+    const btnUpload = document.getElementById('tab-btn-upload');
+
+    if (isDrive) {
+      btnDrive.className = 'flex-1 sm:flex-none px-6 py-3.5 flex items-center justify-center gap-2 border-b-2 border-brand text-brand font-semibold transition';
+      btnUpload.className = 'flex-1 sm:flex-none px-6 py-3.5 flex items-center justify-center gap-2 border-b-2 border-transparent text-slate-500 hover:text-slate-800 transition';
+    } else {
+      btnUpload.className = 'flex-1 sm:flex-none px-6 py-3.5 flex items-center justify-center gap-2 border-b-2 border-brand text-brand font-semibold transition';
+      btnDrive.className = 'flex-1 sm:flex-none px-6 py-3.5 flex items-center justify-center gap-2 border-b-2 border-transparent text-slate-500 hover:text-slate-800 transition';
+    }
+  }
+
+  function toggleMobileDrawer(open) {
+    const drawer = document.getElementById('mobile-drawer');
+    const backdrop = document.getElementById('mobile-drawer-backdrop');
+    if (open) {
+      backdrop.classList.remove('hidden');
+      setTimeout(() => backdrop.classList.remove('opacity-0'), 10);
+      drawer.classList.remove('-translate-x-full');
+    } else {
+      drawer.classList.add('-translate-x-full');
+      backdrop.classList.add('opacity-0');
+      setTimeout(() => backdrop.classList.add('hidden'), 200);
+    }
+  }
+
+  function handleFileDrop(e) {
+    e.preventDefault();
+    const zone = document.getElementById('drop-zone');
+    zone.classList.remove('border-brand', 'bg-blue-50/30');
+    if (e.dataTransfer && e.dataTransfer.files.length) {
+      const fileInput = document.getElementById('file-input');
+      fileInput.files = e.dataTransfer.files;
+      htmx.trigger(document.getElementById('upload-form'), 'submit');
+    }
+  }
+</script>
+
+{% endblock %}

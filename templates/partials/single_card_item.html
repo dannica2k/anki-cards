@@ -1,0 +1,104 @@
+<div class="card-item bg-white rounded-2xl border border-slate-200/90 shadow-2xs p-5 hover:border-slate-300 transition-all space-y-4" data-card-idx="{{ index }}">
+  <!-- Card Header -->
+  <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+    <div class="flex items-center gap-2">
+      <span class="w-2.5 h-2.5 rounded-full bg-brand"></span>
+      <span class="font-bold text-slate-800 text-sm font-mono">Card #<span class="card-num-label">{{ index + 1 }}</span></span>
+      {% if is_new %}
+      <span class="px-2 py-0.5 bg-emerald-50 text-emerald-700 text-[10px] font-bold rounded-full border border-emerald-200">NEW</span>
+      {% endif %}
+    </div>
+    <div class="flex items-center gap-2">
+      <button type="button" onclick="deleteCard(this)" title="Delete this card"
+              class="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition flex items-center justify-center">
+        <span class="material-icons text-lg">delete_outline</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Direct Card Edit Grid -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+    <!-- Front / Cloze Deletions Column -->
+    <div class="space-y-1.5">
+      <div class="flex items-center justify-between">
+        <label class="text-[11px] font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1">
+          <span class="material-icons text-sm text-brand">help_outline</span>
+          <span>Front (Cloze Deletions)</span>
+        </label>
+      </div>
+      <textarea name="front_{{ index }}" rows="6" required
+                placeholder="The &#123;&#123;c1::concept&#125;&#125; works by..."
+                oninput="updateCardMath(this)"
+                class="card-front-input w-full p-3 font-mono text-xs sm:text-sm bg-slate-50/50 hover:bg-white focus:bg-white rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-brand/40 focus:border-brand leading-relaxed transition resize-y">{{ card.text }}</textarea>
+
+      <!-- Live Equation Preview for Front -->
+      <div class="card-math-preview {% if '$' not in card.text and '\\(' not in card.text and '\\[' not in card.text %}hidden{% endif %} mt-2 p-2.5 bg-blue-50/50 border border-blue-200/60 rounded-xl text-xs text-slate-800">
+        <div class="text-[10px] font-bold text-blue-700 uppercase tracking-wider mb-1 flex items-center gap-1">
+          <span class="material-icons text-xs">functions</span>
+          <span>Equation Preview</span>
+        </div>
+        <div class="math-content font-serif leading-relaxed">{{ card.text }}</div>
+      </div>
+    </div>
+
+    <!-- Extra / High-Yield Explanation Column -->
+    <div class="space-y-1.5">
+      <div class="flex items-center justify-between">
+        <label class="text-[11px] font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1">
+          <span class="material-icons text-sm text-teal-600">lightbulb_outline</span>
+          <span>Extra / High-Yield Explanation</span>
+        </label>
+      </div>
+      <textarea name="extra_{{ index }}" rows="6"
+                placeholder="Key mechanism, diagram rationale, or notes..."
+                oninput="updateCardMath(this)"
+                class="card-extra-input w-full p-3 text-xs sm:text-sm bg-slate-50/50 hover:bg-white focus:bg-white rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-brand/40 focus:border-brand leading-relaxed transition resize-y">{{ card.extra_clean }}</textarea>
+
+      <!-- Live Equation Preview for Extra -->
+      <div class="card-math-preview {% if '$' not in card.extra_clean and '\\(' not in card.extra_clean and '\\[' not in card.extra_clean %}hidden{% endif %} mt-2 p-2.5 bg-blue-50/50 border border-blue-200/60 rounded-xl text-xs text-slate-800">
+        <div class="text-[10px] font-bold text-blue-700 uppercase tracking-wider mb-1 flex items-center gap-1">
+          <span class="material-icons text-xs">functions</span>
+          <span>Equation Preview</span>
+        </div>
+        <div class="math-content font-serif leading-relaxed">{{ card.extra_clean }}</div>
+      </div>
+
+      <!-- Embedded Diagram Images (Full size, responsive, click to enlarge) -->
+      {% if card.images %}
+      <div class="pt-2 space-y-2">
+        {% for img_name in card.images %}
+        <div class="rounded-xl overflow-hidden border border-slate-200/90 shadow-2xs bg-slate-50 inline-block">
+          <img src="/api/media/{{ img_name }}" alt="{{ img_name }}" 
+               class="max-h-72 w-auto object-contain rounded-xl cursor-pointer hover:opacity-95 transition"
+               onclick="window.open(this.src)" title="Click to view full image in new tab">
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <!-- Per-Card AI Tutor & Study Guide Links directly under Extra -->
+      <div class="pt-2.5 flex items-center gap-2 text-xs font-semibold">
+        {% if card.ask_gemini_url %}
+        <a href="{{ card.ask_gemini_url }}" target="_blank" rel="noopener noreferrer" 
+           class="text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1">
+          <span>💬</span> <span>Ask Gemini</span>
+        </a>
+        {% endif %}
+        <span class="text-slate-400">•</span>
+        {% if card.guide_exists %}
+        <a href="{{ card.study_guide_url }}" target="_blank" rel="noopener noreferrer" 
+           class="text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1">
+          <span>📚</span> <span>Session Study Guide</span>
+        </a>
+        {% else %}
+        <button type="button" 
+                hx-get="/api/modal/request-guide?course_code={{ course_code or card.course_code or 'BPK 207' }}&session_num={{ session_num or card.session_num or '1' }}&job_id={{ job_id }}"
+                hx-target="#modal-container-slot"
+                class="text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1 font-semibold">
+          <span>📚</span> <span>Session Study Guide</span>
+        </button>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>

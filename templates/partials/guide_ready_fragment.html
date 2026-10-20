@@ -1,0 +1,19 @@
+<div class="p-4 bg-emerald-50 border border-emerald-200/90 rounded-xl space-y-3 animate-in fade-in">
+  <div class="flex items-center gap-2 text-emerald-900 font-bold text-sm">
+    <span class="material-icons text-emerald-600">check_circle</span>
+    <span>Study Guide Ready for {{ course_code }} Session {{ session_num }}!</span>
+  </div>
+  <p class="text-xs text-slate-600">Your illustrated study guide & PDF have been generated and saved.</p>
+  <div class="flex flex-wrap items-center gap-2 pt-1">
+    <a href="/guide/{{ guide_id }}" target="_blank"
+       class="px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-800 font-semibold rounded-xl border border-slate-200 shadow-2xs text-xs flex items-center gap-1.5 transition">
+      <span class="material-icons text-sm text-brand">auto_stories</span>
+      <span>Open Study Guide HTML</span>
+    </a>
+    <a href="/guide/{{ guide_id }}/pdf" target="_blank"
+       class="px-3.5 py-2 bg-brand hover:bg-brandDark text-white font-semibold rounded-xl shadow-2xs text-xs flex items-center gap-1.5 transition">
+      <span class="material-icons text-sm">picture_as_pdf</span>
+      <span>Download PDF</span>
+    </a>
+  </div>
+</div>

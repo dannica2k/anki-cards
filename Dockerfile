@@ -22,5 +22,5 @@ COPY . .
 # Cloud Run injects PORT environment variable (default 8080)
 EXPOSE 8080
 
-# Run Streamlit on 0.0.0.0 and PORT
-ENTRYPOINT ["streamlit", "run", "app.py", "--server.port=8080", "--server.address=0.0.0.0", "--server.headless=true", "--server.enableCORS=false", "--server.enableXsrfProtection=false"]
+# Run FastAPI / Starlette on 0.0.0.0 and PORT
+CMD ["sh", "-c", "exec uvicorn server:app --host 0.0.0.0 --port ${PORT:-8080}"]

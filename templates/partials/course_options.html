@@ -1,0 +1,8 @@
+{% for c in courses %}
+<option value="{{ c.code }}" {% if c.code == selected_code %}selected{% endif %}>
+  {{ c.code }}{% if c.title %} — {{ c.title }}{% endif %}
+</option>
+{% endfor %}
+{% if selected_code and selected_code not in course_codes %}
+<option value="{{ selected_code }}" selected>{{ selected_code }}</option>
+{% endif %}
