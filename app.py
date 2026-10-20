@@ -271,9 +271,11 @@ with st.sidebar:
     with st.popover("", icon=account_icon, help="Google Account"):
         st.markdown("##### 👤 Google Account")
         if is_logged_in:
-            st.success(f"Signed in as:\n**{user_auth_info}**")
-            # User profile preferences
             user_profile = google_auth.get_user_profile(user_auth_info)
+            user_pic = user_profile.get("picture")
+            if user_pic:
+                st.image(user_pic, width=48)
+            st.success(f"Signed in as:\n**{user_auth_info}**")
             saved_key = user_profile.get("personal_gemini_api_key", "")
             user_key_input = st.text_input(
                 "Personal Gemini API Key",

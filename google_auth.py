@@ -18,6 +18,7 @@ from googleapiclient.discovery import build
 SCOPES = [
     'https://www.googleapis.com/auth/drive',
     'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/userinfo.profile',
     'openid'
 ]
 
@@ -212,10 +213,18 @@ def init_google_auth(redirect_uri: str):
             oauth_service = build('oauth2', 'v2', credentials=creds)
             user_info = oauth_service.userinfo().get().execute()
             user_email = user_info.get("email", "Signed in")
+            picture = user_info.get("picture")
+            name = user_info.get("name")
 
             st.session_state["google_creds"] = creds
             st.session_state["google_email"] = user_email
             sid = _save_cached_creds(creds, user_email)
+            u_prof = get_user_profile(user_email)
+            if picture:
+                u_prof["picture"] = picture
+            if name:
+                u_prof["name"] = name
+            save_user_profile(user_email, u_prof)
             st.query_params.clear()
             st.query_params["sid"] = sid
         except Exception as e:

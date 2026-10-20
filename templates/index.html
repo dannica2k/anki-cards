@@ -17,9 +17,18 @@
     </div>
 
     <!-- Account Profile Icon -->
-    <button hx-get="/api/modal/account" hx-target="#modal-container-slot" title="Google Account Profile"
-            class="w-11 h-11 rounded-full flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-[#E1E5EA] transition">
-      <span class="material-symbols-outlined text-[26px]">account_circle</span>
+    <button hx-get="/api/modal/account" hx-target="#modal-container-slot" 
+            title="{% if is_authenticated %}{{ user_email }}{% else %}Google Account Profile{% endif %}"
+            class="w-11 h-11 rounded-full flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-[#E1E5EA] transition group">
+      {% if is_authenticated and user_picture %}
+        <img src="{{ user_picture }}" alt="Profile" class="w-8 h-8 rounded-full object-cover ring-2 ring-emerald-500/80 group-hover:ring-emerald-600 transition shadow-2xs" referrerpolicy="no-referrer">
+      {% elif is_authenticated %}
+        <div class="w-8 h-8 rounded-full bg-brand text-white flex items-center justify-center font-bold text-xs shadow-2xs">
+          {{ user_email[:1]|upper }}
+        </div>
+      {% else %}
+        <span class="material-symbols-outlined text-[26px]">account_circle</span>
+      {% endif %}
     </button>
 
     <!-- Settings Icon -->
@@ -85,8 +94,16 @@
     <nav class="space-y-1.5">
       <button onclick="toggleMobileDrawer(false)" hx-get="/api/modal/account" hx-target="#modal-container-slot"
               class="w-full flex items-center gap-3 px-3.5 py-2.5 text-slate-700 hover:bg-slate-100 rounded-xl text-sm font-medium transition text-left">
-        <span class="material-symbols-outlined text-brand">account_circle</span>
-        <span>Google Account Profile</span>
+        {% if is_authenticated and user_picture %}
+          <img src="{{ user_picture }}" alt="Profile" class="w-6 h-6 rounded-full object-cover ring-1 ring-emerald-500/80" referrerpolicy="no-referrer">
+        {% elif is_authenticated %}
+          <div class="w-6 h-6 rounded-full bg-brand text-white flex items-center justify-center font-bold text-xs">
+            {{ user_email[:1]|upper }}
+          </div>
+        {% else %}
+          <span class="material-symbols-outlined text-brand">account_circle</span>
+        {% endif %}
+        <span>{% if is_authenticated %}{{ user_email }}{% else %}Google Account Profile{% endif %}</span>
       </button>
 
       <button onclick="toggleMobileDrawer(false)" hx-get="/api/modal/settings" hx-target="#modal-container-slot"

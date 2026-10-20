@@ -57,6 +57,57 @@ def get_oauth_redirect_uri(request: Optional[Any] = None) -> str:
         return "https://anki.maranica.com/"
     return "https://anki.maranica.com/"
 
+
+def get_user_session_info(request: Optional[Any] = None) -> Dict[str, Any]:
+    """Retrieves authenticated user session information and profile picture."""
+    cached_creds, cached_email = google_auth._load_cached_creds()
+    is_authenticated = bool(cached_creds and not cached_creds.expired)
+
+    # Support previewing authenticated UI via test_user query parameter
+    if request and request.query_params.get("test_user"):
+        return {
+            "is_authenticated": True,
+            "user_email": "mara@sfu.ca",
+            "user_picture": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
+            "user_name": "Mara Nica",
+            "cached_creds": cached_creds,
+        }
+
+    if not is_authenticated or not cached_email:
+        return {
+            "is_authenticated": False,
+            "user_email": "Default User (Local)",
+            "user_picture": None,
+            "user_name": None,
+            "cached_creds": None,
+        }
+
+    profile = google_auth.get_user_profile(cached_email)
+    picture = profile.get("picture")
+    name = profile.get("name")
+
+    if not picture and cached_creds:
+        try:
+            oauth_service = google_auth.build('oauth2', 'v2', credentials=cached_creds)
+            info = oauth_service.userinfo().get().execute()
+            picture = info.get("picture")
+            name = info.get("name")
+            if picture:
+                profile["picture"] = picture
+            if name:
+                profile["name"] = name
+            google_auth.save_user_profile(cached_email, profile)
+        except Exception as e:
+            print("Error retrieving profile picture:", e)
+
+    return {
+        "is_authenticated": True,
+        "user_email": cached_email,
+        "user_picture": picture,
+        "user_name": name,
+        "cached_creds": cached_creds,
+    }
+
 BASE_DIR = Path(__file__).resolve().parent
 EXTRACTED_DIR = BASE_DIR / "extracted"
 EXTRACTED_DIR.mkdir(parents=True, exist_ok=True)
@@ -224,16 +275,24 @@ async def index(request):
                 flow.fetch_token(code=code)
                 creds = flow.credentials
                 oauth_service = google_auth.build('oauth2', 'v2', credentials=creds)
-                user_info = oauth_service.userinfo().get().execute()
-                email = user_info.get("email", "Local User")
+                user_info_resp = oauth_service.userinfo().get().execute()
+                email = user_info_resp.get("email", "Local User")
+                picture = user_info_resp.get("picture")
+                name = user_info_resp.get("name")
                 google_auth._save_cached_creds(creds, email)
+                profile = google_auth.get_user_profile(email)
+                if picture:
+                    profile["picture"] = picture
+                if name:
+                    profile["name"] = name
+                google_auth.save_user_profile(email, profile)
                 return RedirectResponse("/", status_code=303)
         except Exception as e:
             print("OAuth exchange error:", e)
 
-    # Retrieve user info from cache or default
-    cached_creds, cached_email = google_auth._load_cached_creds()
-    user_email = cached_email or "Local User"
+    # Retrieve user info from session or default
+    user_info = get_user_session_info(request)
+    user_email = user_info["user_email"]
 
     test_cards_html = None
     if request.query_params.get("test_cards"):
@@ -349,7 +408,10 @@ async def index(request):
         name="index.html",
         context={
             "version": version.__version__,
-            "user_email": user_email,
+            "user_email": user_info["user_email"],
+            "user_picture": user_info.get("user_picture"),
+            "user_name": user_info.get("user_name"),
+            "is_authenticated": user_info.get("is_authenticated", False),
             "test_cards_html": test_cards_html,
             "test_pdf_html": test_pdf_html,
         }
@@ -358,14 +420,18 @@ async def index(request):
 
 async def modal_account(request):
     """Account profile modal with Google Sign-In support."""
-    cached_creds, cached_email = google_auth._load_cached_creds()
-    user_email = cached_email or "Default User (Local)"
+    user_info = get_user_session_info(request)
+    user_email = user_info["user_email"]
+    is_authenticated = user_info["is_authenticated"]
+    user_picture = user_info.get("user_picture")
+    user_name = user_info.get("user_name")
+    cached_creds = user_info.get("cached_creds")
+
     profile = google_auth.get_user_profile(user_email)
     user_key = profile.get("gemini_api_key", "")
 
     login_url = None
     client_configured = False
-    is_authenticated = bool(cached_creds and not cached_creds.expired)
 
     client_config = google_auth.get_client_config()
     if client_config:
@@ -393,6 +459,8 @@ async def modal_account(request):
             "user_email": user_email,
             "user_key": user_key,
             "is_authenticated": is_authenticated,
+            "user_picture": user_picture,
+            "user_name": user_name,
             "login_url": login_url,
             "client_configured": client_configured,
         }
