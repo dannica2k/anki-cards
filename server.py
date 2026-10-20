@@ -1431,6 +1431,8 @@ routes = [
     Route("/api/media/{filename:path}", endpoint=serve_media, methods=["GET"]),
     Route("/guide/{guide_id}", endpoint=view_guide, methods=["GET"]),
     Route("/guide/{guide_id}/pdf", endpoint=view_guide_pdf, methods=["GET"]),
+    Route("/favicon.ico", endpoint=lambda req: FileResponse(BASE_DIR / "static" / "favicon.ico", media_type="image/x-icon"), methods=["GET"]),
+    Mount("/static", app=StaticFiles(directory=str(BASE_DIR / "static")), name="static"),
 ]
 
 app = Starlette(debug=True, routes=routes)

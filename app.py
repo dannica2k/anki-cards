@@ -40,7 +40,7 @@ importlib.reload(version)
 # Configure Streamlit page (auto collapses on mobile, expanded on desktop)
 st.set_page_config(
     page_title="Anki Flashcard Studio",
-    page_icon="📇",
+    page_icon="static/favicon.png",
     layout="wide",
     initial_sidebar_state="auto"
 )
