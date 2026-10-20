@@ -241,6 +241,37 @@ def fetch_study_guide_from_drive(service, guide_id: str, base_dir: Path, folder_
         return None
 
 
+def delete_study_guide_from_drive(service, guide_id: str, folder_id: str = DEFAULT_SHARED_FOLDER_ID) -> int:
+    """Searches Google Drive folder for study guide files matching `<guide_id>`, and deletes them."""
+    if not service:
+        return 0
+    clean_id = re.sub(r'[^A-Za-z0-9_-]', '', guide_id)
+    if not clean_id:
+        return 0
+    targets = [
+        f"{clean_id}_guide.json",
+        f"{clean_id}_Study_Guide.html",
+        f"{clean_id}_Study_Guide.pdf",
+        f"{clean_id}_Study_Guide.md",
+        f"{clean_id}_header.md"
+    ]
+    deleted_count = 0
+    for target_name in targets:
+        escaped_name = target_name.replace("'", "\\'")
+        query = f"trashed = false and name = '{escaped_name}' and '{folder_id}' in parents"
+        try:
+            res = service.files().list(q=query, fields="files(id, name)").execute()
+            for f in res.get("files", []):
+                try:
+                    service.files().delete(fileId=f["id"]).execute()
+                    deleted_count += 1
+                except Exception as del_e:
+                    print(f"Could not delete Drive file {f['name']} ({f['id']}): {del_e}")
+        except Exception as q_e:
+            print(f"Could not query Drive file {target_name}: {q_e}")
+    return deleted_count
+
+
 
 def cmd_inspect(args):
     """Downloads/reads PDF, extracts text + annotations + images, and reports deck status."""

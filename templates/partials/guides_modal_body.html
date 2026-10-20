@@ -1,0 +1,36 @@
+{% if guides %}
+  {% for g in guides %}
+  <div class="p-3.5 bg-slate-50 hover:bg-slate-100/80 rounded-xl border border-slate-200/80 flex items-center justify-between gap-3 transition">
+    <div class="min-w-0 flex-1">
+      <div class="font-semibold text-slate-800 text-sm flex items-center gap-2 flex-wrap">
+        <span class="truncate">{{ g.title }}</span>
+        <span class="px-2 py-0.5 bg-brandLight text-brandDark text-[11px] font-semibold rounded-full shrink-0">{{ g.course }}</span>
+      </div>
+      <div class="text-xs text-slate-500 mt-0.5 truncate">Session {{ g.session }} • ID: {{ g.id }}</div>
+    </div>
+    <div class="flex items-center gap-1.5 shrink-0">
+      <a href="/guide/{{ g.id }}" target="_blank" class="px-2.5 py-1.5 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium rounded-lg border border-slate-200 shadow-xs flex items-center gap-1 transition" title="View interactive web guide">
+        <span class="material-symbols-outlined text-sm">visibility</span> View HTML
+      </a>
+      {% if g.has_pdf %}
+      <a href="/guide/{{ g.id }}/pdf" target="_blank" class="px-2.5 py-1.5 bg-brand hover:bg-brandDark text-white text-xs font-medium rounded-lg shadow-xs flex items-center gap-1 transition" title="Download printable PDF">
+        <span class="material-symbols-outlined text-sm">picture_as_pdf</span> PDF
+      </a>
+      {% endif %}
+      <button type="button" 
+              hx-post="/api/guides/delete?id={{ g.id }}" 
+              hx-target="#guides-modal-body"
+              hx-confirm="Are you sure you want to delete the study guide '{{ g.title }}' ({{ g.id }})? This will permanently delete its HTML, PDF, and notes files."
+              class="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition shrink-0" 
+              title="Delete Study Guide">
+        <span class="material-symbols-outlined text-lg">delete_outline</span>
+      </button>
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+  <div class="text-center py-8 text-slate-400">
+    <span class="material-symbols-outlined text-4xl mb-1">menu_book</span>
+    <p class="text-sm">No saved study guides found on disk.</p>
+  </div>
+{% endif %}

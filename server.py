@@ -527,8 +527,8 @@ async def modal_settings(request):
     )
 
 
-async def modal_guides(request):
-    """Lists saved Study Guides."""
+def get_study_guides_list() -> List[Dict[str, Any]]:
+    """Returns a list of all saved study guides on disk."""
     guides_dir = EXTRACTED_DIR / "study_guides"
     guides_dir.mkdir(parents=True, exist_ok=True)
 
@@ -547,10 +547,37 @@ async def modal_guides(request):
             })
         except Exception:
             continue
+    return guides_list
 
+
+async def modal_guides(request):
+    """Lists saved Study Guides."""
+    guides_list = get_study_guides_list()
     return templates.TemplateResponse(
         request=request,
         name="partials/guides_modal.html",
+        context={
+            "guides": guides_list,
+        }
+    )
+
+
+async def guides_delete(request):
+    """Deletes a study guide locally and on Google Drive, then returns updated modal body."""
+    guide_id = request.query_params.get("id", "").strip()
+    if guide_id:
+        generator.delete_local_study_guide(guide_id, BASE_DIR)
+        drive_service = get_authenticated_drive_service()
+        if drive_service and hasattr(anki_cli, "delete_study_guide_from_drive"):
+            try:
+                anki_cli.delete_study_guide_from_drive(drive_service, guide_id)
+            except Exception as e:
+                print(f"Notice: Google Drive study guide deletion: {e}")
+
+    guides_list = get_study_guides_list()
+    return templates.TemplateResponse(
+        request=request,
+        name="partials/guides_modal_body.html",
         context={
             "guides": guides_list,
         }
@@ -1597,6 +1624,7 @@ routes = [
     Route("/api/auth/logout", endpoint=auth_logout, methods=["GET"]),
     Route("/api/modal/settings", endpoint=modal_settings, methods=["GET"]),
     Route("/api/modal/guides", endpoint=modal_guides, methods=["GET"]),
+    Route("/api/guides/delete", endpoint=guides_delete, methods=["POST"]),
     Route("/api/modal/courses", endpoint=modal_courses, methods=["GET"]),
     Route("/api/modal/request-guide", endpoint=modal_request_guide, methods=["GET"]),
     Route("/api/guide/generate-on-demand", endpoint=generate_guide_on_demand, methods=["POST"]),

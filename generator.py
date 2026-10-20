@@ -1051,6 +1051,34 @@ def load_local_study_guide(guide_id: str, base_dir: Path) -> Optional[Dict[str, 
     return None
 
 
+def delete_local_study_guide(guide_id: str, base_dir: Path) -> List[str]:
+    """Deletes all local study guide files for a given guide_id."""
+    clean_id = re.sub(r'[^A-Za-z0-9_-]', '', guide_id)
+    if not clean_id:
+        return []
+    guides_dir = base_dir / "extracted" / "study_guides"
+    if not guides_dir.exists():
+        return []
+
+    deleted = []
+    candidates = [
+        f"{clean_id}_guide.json",
+        f"{clean_id}_Study_Guide.html",
+        f"{clean_id}_Study_Guide.pdf",
+        f"{clean_id}_Study_Guide.md",
+        f"{clean_id}_header.md"
+    ]
+    for c in candidates:
+        p = guides_dir / c
+        if p.exists():
+            try:
+                p.unlink()
+                deleted.append(c)
+            except Exception as e:
+                print(f"Could not delete {p}: {e}")
+    return deleted
+
+
 def _group_slides_by_subsections(
     slides_data: List[Dict[str, Any]],
     max_subsections_per_batch: int = 3,

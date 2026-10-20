@@ -14,35 +14,8 @@
       </button>
     </div>
 
-    <div class="mt-4 flex-1 overflow-y-auto space-y-2 pr-1">
-      {% if guides %}
-        {% for g in guides %}
-        <div class="p-3.5 bg-slate-50 hover:bg-slate-100/80 rounded-xl border border-slate-200/80 flex items-center justify-between transition">
-          <div>
-            <div class="font-semibold text-slate-800 text-sm flex items-center gap-2">
-              <span>{{ g.title }}</span>
-              <span class="px-2 py-0.5 bg-brandLight text-brandDark text-[11px] font-semibold rounded-full">{{ g.course }}</span>
-            </div>
-            <div class="text-xs text-slate-500 mt-0.5">Session {{ g.session }} • ID: {{ g.id }}</div>
-          </div>
-          <div class="flex items-center gap-2">
-            <a href="/guide/{{ g.id }}" target="_blank" class="px-2.5 py-1.5 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium rounded-lg border border-slate-200 shadow-xs flex items-center gap-1 transition">
-              <span class="material-symbols-outlined text-sm">visibility</span> View HTML
-            </a>
-            {% if g.has_pdf %}
-            <a href="/guide/{{ g.id }}/pdf" target="_blank" class="px-2.5 py-1.5 bg-brand hover:bg-brandDark text-white text-xs font-medium rounded-lg shadow-xs flex items-center gap-1 transition">
-              <span class="material-symbols-outlined text-sm">picture_as_pdf</span> PDF
-            </a>
-            {% endif %}
-          </div>
-        </div>
-        {% endfor %}
-      {% else %}
-        <div class="text-center py-8 text-slate-400">
-          <span class="material-symbols-outlined text-4xl mb-1">menu_book</span>
-          <p class="text-sm">No saved study guides found on disk.</p>
-        </div>
-      {% endif %}
+    <div id="guides-modal-body" class="mt-4 flex-1 overflow-y-auto space-y-2 pr-1">
+      {% include "partials/guides_modal_body.html" %}
     </div>
 
     <div class="flex justify-end pt-4 border-t border-slate-100 mt-2">

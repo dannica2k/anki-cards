@@ -244,6 +244,19 @@
       htmx.trigger(document.getElementById('upload-form'), 'submit');
     }
   }
+
+  // Open modal automatically if requested via URL query param
+  document.addEventListener("DOMContentLoaded", () => {
+    const params = new URLSearchParams(window.location.search);
+    const modal = params.get('modal');
+    if (modal === 'guides') {
+      htmx.ajax('GET', '/api/modal/guides', '#modal-container-slot');
+    } else if (modal === 'courses') {
+      htmx.ajax('GET', '/api/modal/courses', '#modal-container-slot');
+    } else if (modal === 'settings') {
+      htmx.ajax('GET', '/api/modal/settings', '#modal-container-slot');
+    }
+  });
 </script>
 
 {% endblock %}
