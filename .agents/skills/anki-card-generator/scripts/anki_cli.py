@@ -156,10 +156,21 @@ def find_course_apkg_on_drive(service, course_compact: str, course_display: str,
 
 
 def download_drive_file(service, file_id: str, dest_path: Path) -> Path:
-    meta = service.files().get(fileId=file_id, fields='name').execute()
-    if dest_path.is_dir():
-        dest_path = dest_path / meta['name']
-    request = service.files().get_media(fileId=file_id)
+    meta = service.files().get(fileId=file_id, fields='name, mimeType').execute()
+    file_name = meta.get('name', f"{file_id}.pdf")
+    mime_type = meta.get('mimeType', '')
+
+    if 'google-apps' in mime_type:
+        if not file_name.lower().endswith('.pdf'):
+            file_name += '.pdf'
+        if dest_path.is_dir():
+            dest_path = dest_path / file_name
+        request = service.files().export_media(fileId=file_id, mimeType='application/pdf')
+    else:
+        if dest_path.is_dir():
+            dest_path = dest_path / file_name
+        request = service.files().get_media(fileId=file_id)
+
     with open(dest_path, 'wb') as f:
         downloader = MediaIoBaseDownload(f, request)
         done = False

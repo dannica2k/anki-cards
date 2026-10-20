@@ -108,6 +108,26 @@ def get_user_session_info(request: Optional[Any] = None) -> Dict[str, Any]:
         "cached_creds": cached_creds,
     }
 
+
+def get_authenticated_drive_service():
+    """Returns an authenticated Google Drive API service using cached user credentials or environment fallback."""
+    cached_creds, cached_email = google_auth._load_cached_creds()
+    if cached_creds:
+        try:
+            if cached_creds.expired and cached_creds.refresh_token:
+                cached_creds.refresh(google_auth.Request())
+                if cached_email:
+                    google_auth._save_cached_creds(cached_creds, cached_email)
+            if not cached_creds.expired:
+                return google_auth.build('drive', 'v3', credentials=cached_creds)
+        except Exception as e:
+            print("Error building Drive service from user credentials:", e)
+
+    try:
+        return anki_cli.get_drive_service()
+    except Exception:
+        return None
+
 BASE_DIR = Path(__file__).resolve().parent
 EXTRACTED_DIR = BASE_DIR / "extracted"
 EXTRACTED_DIR.mkdir(parents=True, exist_ok=True)
@@ -702,55 +722,89 @@ async def generate_guide_on_demand(request):
 # File Fetch & Upload Endpoints
 # ============================================================================
 
+def format_drive_error(err: Any) -> str:
+    """Formats raw Google Drive exceptions into clear, human-readable explanations."""
+    if not err:
+        return "File could not be downloaded."
+    err_str = str(err)
+    if "404" in err_str or "notFound" in err_str:
+        return "File not found. Please double-check the Google Drive link or ID."
+    if "403" in err_str or "forbidden" in err_str or "insufficientPermissions" in err_str:
+        return "Access denied. Your Google account does not have permission to view this file, or the link has not been shared with you."
+    if "Please log in to your Google Account" in err_str:
+        return "Authentication required to access private Google Drive files."
+    if len(err_str) > 120 and "returned \"" in err_str:
+        try:
+            return err_str.split('returned "')[1].split('"')[0]
+        except Exception:
+            pass
+    return err_str[:160]
+
+
 async def drive_fetch(request):
     """Fetches a PDF from Google Drive via URL or ID."""
     form = await request.form()
     drive_url = form.get("drive_url", "").strip()
 
     if not drive_url:
-        return HTMLResponse('<div class="p-4 bg-red-50 text-red-700 rounded-xl text-sm">Please provide a Google Drive link or ID.</div>')
+        return HTMLResponse('<div class="p-4 bg-red-50 text-red-700 rounded-xl text-sm border border-red-200">Please provide a Google Drive link or ID.</div>')
 
-    # Extract ID
-    fid = drive_url
-    if "drive.google.com" in drive_url:
-        match = re.search(r'[-\w]{25,}', drive_url)
-        if match:
-            fid = match.group(0)
+    # Extract ID cleanly
+    fid = anki_cli.extract_drive_id(drive_url)
+    if not fid:
+        return HTMLResponse('<div class="p-4 bg-red-50 text-red-700 rounded-xl text-sm border border-red-200">Could not extract a valid Google Drive file ID from the provided link.</div>')
 
     dest = EXTRACTED_DIR / f"drive_{fid}.pdf"
     download_success = False
     last_err = None
 
-    # Try public download
-    try:
-        import urllib.request
-        public_url = f"https://drive.google.com/uc?export=download&id={fid}"
-        req = urllib.request.Request(public_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            content = resp.read()
-            if content.startswith(b'%PDF'):
-                with open(dest, 'wb') as f:
-                    f.write(content)
-                download_success = True
-    except Exception as e:
-        last_err = e
-
-    # Fallback to anki_cli drive service
-    if not download_success:
+    # 1. Attempt authenticated download via Google Drive API if user is signed in
+    drive_service = get_authenticated_drive_service()
+    if drive_service:
         try:
-            fallback_service = anki_cli.get_drive_service()
-            downloaded_path = anki_cli.download_drive_file(fallback_service, fid, EXTRACTED_DIR)
+            downloaded_path = anki_cli.download_drive_file(drive_service, fid, EXTRACTED_DIR)
             dest = Path(downloaded_path)
             download_success = True
         except Exception as e:
             last_err = e
+            print("Drive API authenticated download failed, trying public fallback:", e)
+
+    # 2. Fallback to public unauthenticated download
+    if not download_success:
+        try:
+            import urllib.request
+            public_url = f"https://drive.google.com/uc?export=download&id={fid}"
+            req = urllib.request.Request(public_url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                content = resp.read()
+                if content.startswith(b'%PDF'):
+                    dest = EXTRACTED_DIR / f"drive_{fid}.pdf"
+                    with open(dest, 'wb') as f:
+                        f.write(content)
+                    download_success = True
+        except Exception as e:
+            if not last_err:
+                last_err = e
 
     if not download_success:
-        return HTMLResponse(
-            f'<div class="p-4 bg-red-50 text-red-700 rounded-xl text-sm border border-red-200">'
-            f'<strong>Fetch Failed:</strong> Could not download file from Google Drive ({last_err}). '
-            f'Ensure the file sharing is set to "Anyone with the link can view".</div>'
-        )
+        clean_err = format_drive_error(last_err)
+        user_info = get_user_session_info(request)
+        if not user_info.get("is_authenticated"):
+            err_html = (
+                f'<div class="p-4 bg-red-50 text-red-700 rounded-xl text-sm border border-red-200 space-y-2">'
+                f'<div><strong>Fetch Failed:</strong> {clean_err}</div>'
+                f'<div class="text-xs text-red-600">If this is a private university file, please '
+                f'<button type="button" hx-get="/api/modal/account" hx-target="#modal-container-slot" class="font-bold underline text-red-800 hover:text-red-950">Sign in with Google</button> first, or set the file sharing to "Anyone with the link can view".</div>'
+                f'</div>'
+            )
+        else:
+            err_html = (
+                f'<div class="p-4 bg-red-50 text-red-700 rounded-xl text-sm border border-red-200 space-y-2">'
+                f'<div><strong>Fetch Failed:</strong> {clean_err}</div>'
+                f'<div class="text-xs text-red-600">Signed in as <strong>{user_info.get("user_email")}</strong>. Ensure this account has view access to the file, or change the file sharing to "Anyone with the link can view".</div>'
+                f'</div>'
+            )
+        return HTMLResponse(err_html)
 
     # Parse course and audit PDF
     try:
@@ -1026,6 +1080,23 @@ async def run_generation_task(
                         lambda: generator.save_study_guide_files(guide_data, BASE_DIR, app_base_url="http://localhost:8000/")
                     )
                     await emit_log(f"Study Guide created & saved: {guide_id}", percent=95)
+                    # Sync to Google Drive if authenticated
+                    sync_service = get_authenticated_drive_service()
+                    if sync_service:
+                        try:
+                            g_json = BASE_DIR / "extracted" / guide_id / f"{guide_id}_guide.json"
+                            g_html = BASE_DIR / "extracted" / guide_id / f"{guide_id}_study_guide.html"
+                            g_pdf = BASE_DIR / "extracted" / guide_id / f"{guide_id}_study_guide.pdf"
+                            if g_json.exists() and g_html.exists():
+                                anki_cli.sync_study_guide_to_drive(
+                                    sync_service,
+                                    g_json,
+                                    g_html,
+                                    pdf_path=g_pdf if g_pdf.exists() else None
+                                )
+                                await emit_log("Study Guide synced to Google Drive!", percent=98)
+                        except Exception as sync_e:
+                            print("Drive sync notice:", sync_e)
             except Exception as e:
                 await emit_log(f"Warning: Study guide generation error: {e}", percent=90)
 
