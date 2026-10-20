@@ -27,7 +27,10 @@ from starlette.routing import Route, Mount
 from starlette.templating import Jinja2Templates
 from starlette.staticfiles import StaticFiles
 
+from dotenv import load_dotenv
+
 BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 sys.path.insert(0, str(BASE_DIR / ".agents" / "skills" / "anki-card-generator" / "scripts"))
 sys.path.insert(0, str(BASE_DIR))
 
@@ -36,6 +39,23 @@ import generator
 import google_auth
 import version
 import anki_cli
+
+
+def get_oauth_redirect_uri(request: Optional[Any] = None) -> str:
+    """Determines authorized OAuth redirect URI for Cloud Run or local dev."""
+    configured = os.getenv("REDIRECT_URI")
+    if configured:
+        return configured
+    if request:
+        host = request.headers.get("host", "")
+        if "anki.maranica.com" in host:
+            return "https://anki.maranica.com/"
+        if host:
+            proto = request.headers.get("x-forwarded-proto", "http" if "localhost" in host else "https")
+            return f"{proto}://{host}/"
+    if os.getenv("K_SERVICE"):
+        return "https://anki.maranica.com/"
+    return "https://anki.maranica.com/"
 
 BASE_DIR = Path(__file__).resolve().parent
 EXTRACTED_DIR = BASE_DIR / "extracted"
@@ -192,8 +212,8 @@ async def index(request):
     code = request.query_params.get("code")
     if code:
         try:
-            client_config = google_auth._get_client_config()
-            redirect_uri = google_auth.safe_get_secret("REDIRECT_URI", "https://anki.maranica.com/")
+            client_config = google_auth.get_client_config()
+            redirect_uri = get_oauth_redirect_uri(request)
             if client_config:
                 flow = google_auth.Flow.from_client_config(
                     client_config,
@@ -344,12 +364,15 @@ async def modal_account(request):
     user_key = profile.get("gemini_api_key", "")
 
     login_url = None
+    client_configured = False
     is_authenticated = bool(cached_creds and not cached_creds.expired)
-    if not is_authenticated:
-        try:
-            client_config = google_auth._get_client_config()
-            if client_config:
-                redirect_uri = google_auth.safe_get_secret("REDIRECT_URI", "https://anki.maranica.com/")
+
+    client_config = google_auth.get_client_config()
+    if client_config:
+        client_configured = True
+        if not is_authenticated:
+            try:
+                redirect_uri = get_oauth_redirect_uri(request)
                 flow = google_auth.Flow.from_client_config(
                     client_config,
                     scopes=google_auth.SCOPES,
@@ -360,8 +383,8 @@ async def modal_account(request):
                 if not google_auth._has_stored_refresh_token():
                     auth_kwargs["prompt"] = "consent"
                 login_url, _ = flow.authorization_url(**auth_kwargs)
-        except Exception:
-            pass
+            except Exception as e:
+                print("Error generating Google OAuth URL:", e)
 
     return templates.TemplateResponse(
         request=request,
@@ -371,6 +394,7 @@ async def modal_account(request):
             "user_key": user_key,
             "is_authenticated": is_authenticated,
             "login_url": login_url,
+            "client_configured": client_configured,
         }
     )
 

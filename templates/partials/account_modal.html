@@ -23,14 +23,27 @@
           <a href="/api/auth/logout" class="text-xs text-red-600 hover:underline font-semibold ml-2">Log out</a>
           {% endif %}
         </div>
-        {% if not is_authenticated and login_url %}
-        <div class="pt-2">
-          <a href="{{ login_url }}" target="_self" 
-             class="w-full flex items-center justify-center gap-2 px-3 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-xl text-xs font-semibold shadow-2xs transition">
-            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" class="w-4 h-4">
-            <span>Sign in with Google</span>
-          </a>
-        </div>
+        {% if not is_authenticated %}
+          {% if login_url %}
+          <div class="pt-2">
+            <a href="{{ login_url }}" target="_self" 
+               class="w-full flex items-center justify-center gap-2.5 px-4 py-2.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-xl text-sm font-semibold shadow-2xs hover:shadow transition">
+              <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" class="w-4 h-4">
+              <span>Sign in with Google</span>
+            </a>
+            <p class="text-xs text-slate-400 mt-1.5 text-center">Sign in to fetch private files and sync decks to your Google Drive.</p>
+          </div>
+          {% else %}
+          <div class="mt-2 p-3 bg-amber-50 border border-amber-200/80 rounded-xl text-xs text-amber-800 space-y-1">
+            <div class="font-bold flex items-center gap-1.5">
+              <span class="material-symbols-outlined text-sm">info</span>
+              <span>Google OAuth Not Configured</span>
+            </div>
+            <p class="text-[11px] text-amber-700 leading-relaxed">
+              Add <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> to your environment to enable Google Sign-In.
+            </p>
+          </div>
+          {% endif %}
         {% endif %}
       </div>
 
