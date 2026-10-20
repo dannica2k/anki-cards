@@ -1,0 +1,332 @@
+<!-- File Preview & Generation Control Card -->
+<div class="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-6 space-y-6 animate-in fade-in duration-200">
+  
+  <!-- File Metadata Header -->
+  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
+    <div class="flex items-start gap-3">
+      <div class="w-10 h-10 rounded-xl bg-red-50 text-red-600 flex items-center justify-center shrink-0">
+        <span class="material-icons text-2xl">picture_as_pdf</span>
+      </div>
+      <div>
+        <h4 class="font-bold text-slate-800 text-base leading-snug">{{ filename }}</h4>
+        <p class="text-xs text-slate-500 mt-0.5">
+          <span class="font-semibold text-slate-700">{{ num_pages }} slides</span> audited • 
+          <span class="font-semibold text-slate-700">{{ num_images }} diagrams/figures</span> extracted
+        </p>
+      </div>
+    </div>
+    <div class="flex items-center gap-2 self-start sm:self-auto">
+      <span class="px-3 py-1 bg-brandLight text-brandDark text-xs font-bold rounded-full border border-blue-200">
+        {{ course_code }}
+      </span>
+      {% if session_num %}
+      <span class="px-2.5 py-1 bg-slate-100 text-slate-700 text-xs font-semibold rounded-full">
+        Session {{ session_num }}
+      </span>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Lecture Audit & Detected Exam Notes (Detailed Analysis & Topics List) -->
+  <div class="bg-blue-50/60 border border-blue-100/90 rounded-2xl p-5 text-xs space-y-3">
+    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-blue-100 pb-2.5">
+      <div class="font-bold text-slate-800 flex items-center gap-2 text-sm">
+        <span class="material-icons text-base text-brand">analytics</span>
+        <span>Lecture Audit & Detected Exam Notes</span>
+      </div>
+      <div class="flex items-center gap-2 text-[11px] font-semibold text-brand">
+        <span class="bg-blue-100/80 px-2.5 py-0.5 rounded-full">{{ num_pages }} Slides</span>
+        <span class="bg-blue-100/80 px-2.5 py-0.5 rounded-full">{{ num_images }} Diagrams</span>
+        {% if sections %}
+        <span class="bg-blue-100/80 px-2.5 py-0.5 rounded-full">{{ sections | length }} Topics Found</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Observations -->
+    {% if observations %}
+    <div class="space-y-1.5 pt-0.5">
+      {% for obs in observations %}
+      <div class="text-slate-700 leading-relaxed">{{ obs | safe }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Gap / Format Warnings -->
+    {% if gap_warnings %}
+    <div class="space-y-1.5 pt-0.5">
+      {% for warn in gap_warnings %}
+      <div class="text-amber-900 bg-amber-50/90 p-2.5 rounded-xl border border-amber-200/80 leading-relaxed font-medium flex items-start gap-2">
+        <span class="material-icons text-amber-600 text-sm shrink-0 mt-0.5">warning_amber</span>
+        <div>{{ warn | safe }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Detected Core Topics & Sub-Sections Covered -->
+    {% if sections %}
+    <details id="audit-topics-details" class="pt-2 border-t border-blue-100/80" open>
+      <summary class="font-bold text-slate-700 cursor-pointer select-none text-xs flex items-center justify-between hover:text-brand transition py-1">
+        <span class="flex items-center gap-1.5">
+          <span class="material-icons text-sm text-brand">checklist</span>
+          <span>Main Lecture Topics & Sub-Sections ({{ sections | length }} areas covered):</span>
+        </span>
+        <span class="text-[11px] font-normal text-slate-400">click to collapse/expand</span>
+      </summary>
+      <div class="mt-2.5 max-h-52 overflow-y-auto space-y-1 pr-1 bg-white/80 p-3 rounded-xl border border-blue-100 font-mono text-[11px] text-slate-700">
+        {% for sec in sections %}
+        <div class="flex items-start gap-2 py-0.5 border-b border-slate-100 last:border-b-0">
+          <span class="text-brand shrink-0 font-bold">•</span>
+          <span class="leading-relaxed">{{ sec }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+  </div>
+
+  <!-- Generation Parameters Form -->
+  <form id="gen-form" hx-post="/api/generate/start" hx-target="#generation-area" hx-indicator="#global-spinner" 
+        onsubmit="handleGenerationSubmit(this)" class="space-y-6">
+    <input type="hidden" name="pdf_path" value="{{ pdf_path }}">
+    <input type="hidden" name="filename" value="{{ filename }}">
+    <!-- Hidden Inputs for Density & Target Cards -->
+    <input type="hidden" id="density-mode-input" name="density_mode" value="Regular Recap">
+    <input type="hidden" id="target-count-input" name="target_count" value="{{ proj_counts.get('Regular Recap', 25) }}">
+
+    <!-- Course & Session Selection -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div>
+        <div class="flex items-center justify-between mb-1.5">
+          <label class="text-xs font-semibold text-slate-600 uppercase tracking-wider block">Target Course</label>
+          <button type="button" hx-get="/api/modal/courses" hx-target="#modal-container-slot"
+                  class="text-xs font-semibold text-brand hover:underline flex items-center gap-1">
+            <span class="material-icons text-sm">settings</span>
+            <span>Manage Courses</span>
+          </button>
+        </div>
+        <select id="course-select" name="course_code" 
+                hx-get="/api/courses/options?selected={{ course_code }}" 
+                hx-trigger="coursesChanged from:body"
+                class="w-full px-3 py-2.5 text-sm bg-white rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-brand/40 focus:border-brand font-medium">
+          {% for c in courses %}
+          <option value="{{ c.code }}" {% if c.code == course_code %}selected{% endif %}>
+            {{ c.code }}{% if c.title %} — {{ c.title }}{% endif %}
+          </option>
+          {% endfor %}
+          {% if course_code and course_code not in (courses | map(attribute='code') | list) %}
+          <option value="{{ course_code }}" selected>{{ course_code }}</option>
+          {% endif %}
+        </select>
+      </div>
+
+      <div>
+        <label class="text-xs font-semibold text-slate-600 uppercase tracking-wider block mb-1.5">Session / Chapter</label>
+        <input type="text" name="session_num" value="{{ session_num or '1' }}" 
+               class="w-full px-3 py-2.5 text-sm rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-brand/40 focus:border-brand font-medium">
+      </div>
+    </div>
+
+    <!-- Density Level & Target Card Steppers (Integrated +/- inside each box) -->
+    <div class="space-y-2">
+      <div class="flex items-center justify-between">
+        <label class="text-xs font-semibold text-slate-600 uppercase tracking-wider">Density Level & Target Cards</label>
+        <span class="text-xs text-slate-400">Use + / − inside each tier to adjust card count</span>
+      </div>
+
+      <!-- 3 Tier Cards with Integrated Steppers -->
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+        
+        <!-- High Level -->
+        <div id="density-box-High-Level" 
+             onclick="selectDensity('High Level')"
+             class="relative flex flex-col justify-between p-4 border border-slate-200 rounded-2xl cursor-pointer transition hover:border-brand/60 bg-white shadow-2xs">
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <span class="font-bold text-sm text-slate-800">High Level</span>
+              <input type="radio" id="density-radio-High-Level" name="_density_radio" value="High Level" 
+                     class="w-4 h-4 text-brand focus:ring-brand pointer-events-none">
+            </div>
+            <p class="text-xs text-slate-500 leading-snug">Core concepts & big-picture definitions</p>
+          </div>
+          
+          <div class="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
+            <span class="text-xs font-medium text-slate-400">Target</span>
+            <div class="flex items-center gap-1 bg-slate-100/80 rounded-lg p-0.5 border border-slate-200/80">
+              <button type="button" onclick="event.stopPropagation(); stepBoxCount('High Level', -5)" 
+                      class="w-6 h-6 rounded flex items-center justify-center text-slate-600 hover:bg-white hover:text-slate-900 font-bold text-sm shadow-2xs transition"
+                      title="Decrease cards by 5">−</button>
+              <span id="display-count-High-Level" class="w-16 text-center font-bold text-xs text-slate-800 font-mono">
+                {{ proj_counts.get('High Level', 15) }} cards
+              </span>
+              <button type="button" onclick="event.stopPropagation(); stepBoxCount('High Level', 5)" 
+                      class="w-6 h-6 rounded flex items-center justify-center text-slate-600 hover:bg-white hover:text-slate-900 font-bold text-sm shadow-2xs transition"
+                      title="Increase cards by 5">+</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Regular Recap (Default Selected) -->
+        <div id="density-box-Regular-Recap" 
+             onclick="selectDensity('Regular Recap')"
+             class="relative flex flex-col justify-between p-4 border-2 border-brand rounded-2xl cursor-pointer transition bg-blue-50/30 shadow-2xs">
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <div class="flex items-center gap-1.5">
+                <span class="font-bold text-sm text-slate-900">Regular Recap</span>
+                <span class="px-1.5 py-0.2 bg-brand text-white text-[10px] font-bold rounded uppercase tracking-wide">Rec</span>
+              </div>
+              <input type="radio" id="density-radio-Regular-Recap" name="_density_radio" value="Regular Recap" checked 
+                     class="w-4 h-4 text-brand focus:ring-brand pointer-events-none">
+            </div>
+            <p class="text-xs text-slate-500 leading-snug">Full exam coverage of all testable mechanisms</p>
+          </div>
+          
+          <div class="mt-4 pt-3 border-t border-blue-100 flex items-center justify-between">
+            <span class="text-xs font-semibold text-brand">Target</span>
+            <div class="flex items-center gap-1 bg-white rounded-lg p-0.5 border border-blue-200 shadow-2xs">
+              <button type="button" onclick="event.stopPropagation(); stepBoxCount('Regular Recap', -5)" 
+                      class="w-6 h-6 rounded flex items-center justify-center text-slate-600 hover:bg-blue-50 hover:text-brand font-bold text-sm shadow-2xs transition"
+                      title="Decrease cards by 5">−</button>
+              <span id="display-count-Regular-Recap" class="w-16 text-center font-bold text-xs text-brandDark font-mono">
+                {{ proj_counts.get('Regular Recap', 25) }} cards
+              </span>
+              <button type="button" onclick="event.stopPropagation(); stepBoxCount('Regular Recap', 5)" 
+                      class="w-6 h-6 rounded flex items-center justify-center text-slate-600 hover:bg-blue-50 hover:text-brand font-bold text-sm shadow-2xs transition"
+                      title="Increase cards by 5">+</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Deep Dive -->
+        <div id="density-box-Deep-Dive" 
+             onclick="selectDensity('Deep Dive')"
+             class="relative flex flex-col justify-between p-4 border border-slate-200 rounded-2xl cursor-pointer transition hover:border-brand/60 bg-white shadow-2xs">
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <span class="font-bold text-sm text-slate-800">Deep Dive</span>
+              <input type="radio" id="density-radio-Deep-Dive" name="_density_radio" value="Deep Dive" 
+                     class="w-4 h-4 text-brand focus:ring-brand pointer-events-none">
+            </div>
+            <p class="text-xs text-slate-500 leading-snug">Exhaustive sub-bullet granularity & nuances</p>
+          </div>
+          
+          <div class="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
+            <span class="text-xs font-medium text-slate-400">Target</span>
+            <div class="flex items-center gap-1 bg-slate-100/80 rounded-lg p-0.5 border border-slate-200/80">
+              <button type="button" onclick="event.stopPropagation(); stepBoxCount('Deep Dive', -5)" 
+                      class="w-6 h-6 rounded flex items-center justify-center text-slate-600 hover:bg-white hover:text-slate-900 font-bold text-sm shadow-2xs transition"
+                      title="Decrease cards by 5">−</button>
+              <span id="display-count-Deep-Dive" class="w-16 text-center font-bold text-xs text-slate-800 font-mono">
+                {{ proj_counts.get('Deep Dive', 40) }} cards
+              </span>
+              <button type="button" onclick="event.stopPropagation(); stepBoxCount('Deep Dive', 5)" 
+                      class="w-6 h-6 rounded flex items-center justify-center text-slate-600 hover:bg-white hover:text-slate-900 font-bold text-sm shadow-2xs transition"
+                      title="Increase cards by 5">+</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Custom Focus Guidance -->
+    <div>
+      <label class="text-xs font-semibold text-slate-600 uppercase tracking-wider block mb-1.5">
+        Custom Focus Guidance <span class="text-slate-400 font-normal lowercase">(optional prof hints or topic emphasis)</span>
+      </label>
+      <input type="text" name="custom_guidance" placeholder="e.g. Focus heavily on reflex pathways, muscle vibration illusions, and the GTO mechanism"
+             class="w-full px-4 py-2.5 text-sm rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-brand/40 focus:border-brand">
+    </div>
+
+    <!-- Toggle for Study Guide (Unchecked by default) -->
+    <div class="flex items-center gap-3 p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 hover:bg-slate-100/60 transition">
+      <input type="checkbox" id="gen_study_guide" name="gen_study_guide" value="true"
+             class="w-4 h-4 text-brand rounded border-slate-300 focus:ring-brand cursor-pointer">
+      <label for="gen_study_guide" class="text-sm font-medium text-slate-700 cursor-pointer select-none">
+        Generate Illustrated Supplementary Study Guide & Letter PDF alongside Anki deck
+      </label>
+    </div>
+
+    <!-- Primary Action Button with Immediate Double-Click Prevention -->
+    <div class="pt-2">
+      <button type="submit" id="btn-generate-deck"
+              class="w-full py-3.5 px-5 bg-gradient-to-r from-brand to-brandDark hover:from-brandDark hover:to-blue-800 text-white font-bold rounded-xl shadow-md hover:shadow-lg transition flex items-center justify-center gap-2 text-base">
+        <span id="btn-gen-icon" class="material-icons text-2xl">bolt</span>
+        <span id="btn-gen-text">Generate Anki Cloze Deck</span>
+      </button>
+    </div>
+  </form>
+</div>
+
+<script>
+  const densityCounts = {
+    'High Level': {{ proj_counts.get('High Level', 15) }},
+    'Regular Recap': {{ proj_counts.get('Regular Recap', 25) }},
+    'Deep Dive': {{ proj_counts.get('Deep Dive', 40) }}
+  };
+  let activeDensity = 'Regular Recap';
+
+  function selectDensity(mode) {
+    activeDensity = mode;
+    const modeInput = document.getElementById('density-mode-input');
+    const targetInput = document.getElementById('target-count-input');
+    if (modeInput) modeInput.value = mode;
+    if (targetInput) targetInput.value = densityCounts[mode];
+
+    ['High Level', 'Regular Recap', 'Deep Dive'].forEach(m => {
+      const slug = m.replace(/\s+/g, '-');
+      const box = document.getElementById('density-box-' + slug);
+      const radio = document.getElementById('density-radio-' + slug);
+      if (box) {
+        if (m === mode) {
+          box.className = 'relative flex flex-col justify-between p-4 border-2 border-brand rounded-2xl cursor-pointer transition bg-blue-50/30 shadow-2xs';
+          if (radio) radio.checked = true;
+        } else {
+          box.className = 'relative flex flex-col justify-between p-4 border border-slate-200 rounded-2xl cursor-pointer transition hover:border-brand/60 bg-white shadow-2xs';
+          if (radio) radio.checked = false;
+        }
+      }
+    });
+  }
+
+  function stepBoxCount(mode, delta) {
+    let current = densityCounts[mode] || 25;
+    current = Math.max(5, Math.min(250, current + delta));
+    densityCounts[mode] = current;
+    const slug = mode.replace(/\s+/g, '-');
+    const disp = document.getElementById('display-count-' + slug);
+    if (disp) disp.innerText = current + ' cards';
+
+    // Activate the stepped mode and sync target input
+    selectDensity(mode);
+  }
+
+  function handleGenerationSubmit(form) {
+    const btn = document.getElementById('btn-generate-deck');
+    const btnText = document.getElementById('btn-gen-text');
+    const btnIcon = document.getElementById('btn-gen-icon');
+    if (btn) {
+      btn.disabled = true;
+      btn.classList.add('opacity-80', 'cursor-wait', 'pointer-events-none');
+    }
+    if (btnText) btnText.innerText = 'Initializing AI Generation...';
+    if (btnIcon) {
+      btnIcon.innerText = 'sync';
+      btnIcon.classList.add('animate-spin');
+    }
+
+    // Collapse topics list if open so the audit header + progress bar fit in view
+    const details = document.getElementById('audit-topics-details');
+    if (details) details.open = false;
+
+    // Smoothly scroll down so the generation area / progress bar is front and center
+    setTimeout(() => {
+      const genArea = document.getElementById('generation-area');
+      if (genArea) {
+        genArea.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 150);
+  }
+</script>

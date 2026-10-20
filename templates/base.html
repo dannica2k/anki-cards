@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-[#f8fafd]">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Anki Flashcard Studio{% endblock %}</title>
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: '#1E88E5',
+            brandDark: '#1565C0',
+            brandLight: '#E3F2FD',
+            rail: '#F6F8FC',
+            borderLight: '#E1E5EA',
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- HTMX & SSE Extension -->
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
+
+  <!-- KaTeX for LaTeX Math Rendering -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
+          onload="initKaTeX()"></script>
+
+  <!-- Google Material Icons -->
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+
+  <style>
+    .material-icons, .material-symbols-outlined {
+      font-family: 'Material Icons';
+      font-weight: normal;
+      font-style: normal;
+      font-size: 24px;
+      line-height: 1;
+      letter-spacing: normal;
+      text-transform: none;
+      display: inline-block;
+      white-space: nowrap;
+      word-wrap: normal;
+      direction: ltr;
+      -webkit-font-feature-settings: 'liga';
+      font-feature-settings: 'liga';
+      -webkit-font-smoothing: antialiased;
+      vertical-align: middle;
+    }
+    .cloze-c1 {
+      background-color: #E3F2FD;
+      color: #1565C0;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 4px;
+      border: 1px solid #BBDEFB;
+    }
+    .cloze-c2 {
+      background-color: #FFF3E0;
+      color: #E65100;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 4px;
+      border: 1px solid #FFE0B2;
+    }
+    .cloze-c3 {
+      background-color: #E8F5E9;
+      color: #2E7D32;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 4px;
+      border: 1px solid #C8E6C9;
+    }
+    .cloze-c4 {
+      background-color: #F3E5F5;
+      color: #7B1FA2;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 4px;
+      border: 1px solid #E1BEE7;
+    }
+    .cloze-c5 {
+      background-color: #FCE4EC;
+      color: #C2185B;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 4px;
+      border: 1px solid #F8BBD0;
+    }
+    .cloze-c6 {
+      background-color: #E0F2F1;
+      color: #00796B;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 4px;
+      border: 1px solid #B2DFDB;
+    }
+    /* Smooth transitions */
+    .drawer-transition {
+      transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+  </style>
+  <script>
+    function initKaTeX(el) {
+      const target = el || document.body;
+      if (window.renderMathInElement) {
+        renderMathInElement(target, {
+          delimiters: [
+            {left: '$$', right: '$$', display: true},
+            {left: '$', right: '$', display: false},
+            {left: '\\(', right: '\\)', display: false},
+            {left: '\\[', right: '\\]', display: true}
+          ],
+          throwOnError: false
+        });
+      }
+    }
+    document.addEventListener('DOMContentLoaded', () => initKaTeX());
+    document.body?.addEventListener('htmx:afterSwap', (evt) => initKaTeX(evt.target));
+  </script>
+</head>
+<body class="h-full text-slate-800 antialiased flex flex-col md:flex-row overflow-x-hidden">
+
+  {% block content %}{% endblock %}
+
+  <!-- HTMX Loading Indicator -->
+  <div id="global-spinner" class="htmx-indicator fixed bottom-4 right-4 bg-slate-900/90 text-white px-4 py-2 rounded-full shadow-lg text-sm flex items-center gap-2 z-50">
+    <svg class="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+    </svg>
+    <span>Processing...</span>
+  </div>
+
+  <!-- HTMX Global Error Alert Toast -->
+  <div id="global-error-toast" class="hidden fixed top-4 right-4 bg-red-600 text-white px-5 py-3 rounded-xl shadow-xl text-sm font-medium z-50 flex items-center gap-2 animate-in fade-in slide-in-from-top-2">
+    <span class="material-icons text-xl">error_outline</span>
+    <span id="global-error-msg">An unexpected error occurred.</span>
+    <button onclick="document.getElementById('global-error-toast').classList.add('hidden')" class="ml-2 hover:opacity-80">
+      <span class="material-icons text-base">close</span>
+    </button>
+  </div>
+
+  <script>
+    document.body.addEventListener('htmx:responseError', function (evt) {
+      const toast = document.getElementById('global-error-toast');
+      const msg = document.getElementById('global-error-msg');
+      if (toast && msg) {
+        msg.innerText = evt.detail.xhr.responseText || `Server returned error (${evt.detail.xhr.status})`;
+        toast.classList.remove('hidden');
+        setTimeout(() => toast.classList.add('hidden'), 8000);
+      }
+    });
+  </script>
+</body>
+</html>
