@@ -5,8 +5,9 @@ __pycache__/
 *.apkg
 *.tar.gz
 *.zip
-*.pdf
-extracted/
+/*.pdf
+extracted/*
+!extracted/study_guides/
 credentials.json
 token.json
 session_*.txt

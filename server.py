@@ -652,18 +652,39 @@ async def generate_guide_on_demand(request):
     guides_dir = EXTRACTED_DIR / "study_guides"
     guides_dir.mkdir(parents=True, exist_ok=True)
     guide_html = guides_dir / f"{expected_id}_Study_Guide.html"
+    guide_pdf = guides_dir / f"{expected_id}_Study_Guide.pdf"
+    guide_json = guides_dir / f"{expected_id}_guide.json"
 
-    if not guide_html.exists():
-        # Find audit slides data
-        audit_file = EXTRACTED_DIR / expected_id / "audit.json"
+    # Check if a valid, non-placeholder guide already exists on disk
+    is_valid_guide = False
+    if guide_html.exists() and guide_pdf.exists():
+        try:
+            content = guide_html.read_text(encoding="utf-8")
+            if "Generated on demand." not in content and len(content) > 500:
+                is_valid_guide = True
+        except Exception:
+            pass
+
+    if not is_valid_guide:
+        # 1. Retrieve slides_data from job memory if available
         slides_data = []
-        if audit_file.exists():
-            try:
-                ad = json.loads(audit_file.read_text(encoding="utf-8"))
-                slides_data = ad.get("slides_data", [])
-            except Exception:
-                pass
-        
+        if job_id and job_id in JOBS:
+            job_obj = JOBS[job_id]
+            slides_data = job_obj.get("slides_data", [])
+            if not slides_data and job_obj.get("result"):
+                slides_data = job_obj["result"].get("slides_data", [])
+
+        # 2. Check expected_id directory on disk
+        if not slides_data:
+            audit_file = EXTRACTED_DIR / expected_id / "audit.json"
+            if audit_file.exists():
+                try:
+                    ad = json.loads(audit_file.read_text(encoding="utf-8"))
+                    slides_data = ad.get("slides_data", [])
+                except Exception:
+                    pass
+
+        # 3. Check any audit.json files in extracted directory
         if not slides_data:
             for af in sorted(EXTRACTED_DIR.glob("**/audit.json")):
                 try:
@@ -673,6 +694,30 @@ async def generate_guide_on_demand(request):
                         break
                 except Exception:
                     pass
+
+        # 4. Check if lecture PDF can be analyzed on the fly
+        if not slides_data:
+            pdf_path_cand = None
+            if job_id and job_id in JOBS:
+                pdf_path_cand = JOBS[job_id].get("pdf_path")
+            if not pdf_path_cand:
+                pdf_matches = list(EXTRACTED_DIR.glob(f"*{clean_course}*Session*{session_num}*.pdf"))
+                if pdf_matches:
+                    pdf_path_cand = str(pdf_matches[0])
+            if pdf_path_cand and os.path.exists(pdf_path_cand):
+                try:
+                    audit = generator.analyze_lecture_pdf(pdf_path_cand, BASE_DIR, course_code=course_code, session_num=session_num)
+                    slides_data = audit.get("slides_data", [])
+                except Exception as e:
+                    print("Could not analyze lecture PDF on demand:", e)
+
+        if not slides_data:
+            return HTMLResponse(
+                f'<div class="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl">'
+                f'Could not find lecture slides data to generate study guide. Please generate the deck with the "Generate Supplementary Study Guide" option selected.'
+                f'</div>',
+                status_code=400
+            )
 
         keys_pool = get_api_keys_pool()
         main_loop = asyncio.get_running_loop()
@@ -686,7 +731,7 @@ async def generate_guide_on_demand(request):
                     custom_focus="",
                     base_dir=BASE_DIR,
                     api_keys_pool=keys_pool,
-                    app_base_url="http://localhost:8000/"
+                    app_base_url="https://anki.maranica.com/"
                 )
             )
             if guide_data:
@@ -694,13 +739,28 @@ async def generate_guide_on_demand(request):
                 guide_data["guide_id"] = guide_id
                 await main_loop.run_in_executor(
                     None,
-                    lambda: generator.save_study_guide_files(guide_data, BASE_DIR, app_base_url="http://localhost:8000/")
+                    lambda: generator.save_study_guide_files(guide_data, BASE_DIR, app_base_url="https://anki.maranica.com/")
                 )
+                # Sync to Google Drive if authenticated
+                sync_service = get_authenticated_drive_service()
+                if sync_service:
+                    try:
+                        g_json = guides_dir / f"{guide_id}_guide.json"
+                        g_html = guides_dir / f"{guide_id}_Study_Guide.html"
+                        g_pdf = guides_dir / f"{guide_id}_Study_Guide.pdf"
+                        if g_json.exists() and g_html.exists():
+                            anki_cli.sync_study_guide_to_drive(
+                                sync_service,
+                                g_json,
+                                g_html,
+                                pdf_path=g_pdf if g_pdf.exists() else None
+                            )
+                    except Exception as se:
+                        print("On-demand drive sync notice:", se)
             else:
-                guide_id = expected_id
-        except Exception:
-            guide_id = expected_id
-            guide_html.write_text(f"<!DOCTYPE html><html><body><h1>{course_code} Session {session_num} Study Guide</h1><p>Generated on demand.</p></body></html>", encoding="utf-8")
+                return HTMLResponse('<div class="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl">Study guide generation failed to produce sections.</div>', status_code=500)
+        except Exception as e:
+            return HTMLResponse(f'<div class="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl">Error generating study guide: {html.escape(str(e))}</div>', status_code=500)
     else:
         guide_id = expected_id
 
@@ -984,6 +1044,8 @@ async def run_generation_task(
         pdf = Path(pdf_path)
         audit = generator.analyze_lecture_pdf(str(pdf), BASE_DIR, course_code=course_code, session_num=session_num)
         slides_data = audit["slides_data"]
+        JOBS[job_id]["slides_data"] = slides_data
+        JOBS[job_id]["pdf_path"] = str(pdf)
 
         # Build keys pool
         _, cached_email = google_auth._load_cached_creds()
@@ -1077,16 +1139,16 @@ async def run_generation_task(
                     guide_data["guide_id"] = guide_id
                     await main_loop.run_in_executor(
                         None,
-                        lambda: generator.save_study_guide_files(guide_data, BASE_DIR, app_base_url="http://localhost:8000/")
+                        lambda: generator.save_study_guide_files(guide_data, BASE_DIR, app_base_url="https://anki.maranica.com/")
                     )
                     await emit_log(f"Study Guide created & saved: {guide_id}", percent=95)
                     # Sync to Google Drive if authenticated
                     sync_service = get_authenticated_drive_service()
                     if sync_service:
                         try:
-                            g_json = BASE_DIR / "extracted" / guide_id / f"{guide_id}_guide.json"
-                            g_html = BASE_DIR / "extracted" / guide_id / f"{guide_id}_study_guide.html"
-                            g_pdf = BASE_DIR / "extracted" / guide_id / f"{guide_id}_study_guide.pdf"
+                            g_json = BASE_DIR / "extracted" / "study_guides" / f"{guide_id}_guide.json"
+                            g_html = BASE_DIR / "extracted" / "study_guides" / f"{guide_id}_Study_Guide.html"
+                            g_pdf = BASE_DIR / "extracted" / "study_guides" / f"{guide_id}_Study_Guide.pdf"
                             if g_json.exists() and g_html.exists():
                                 anki_cli.sync_study_guide_to_drive(
                                     sync_service,
@@ -1123,6 +1185,8 @@ async def run_generation_task(
             "course_code": course_code,
             "session_num": session_num,
             "media_files": media_files,
+            "slides_data": slides_data,
+            "pdf_path": str(pdf),
         }
         JOBS[job_id]["status"] = "complete"
 
@@ -1246,9 +1310,30 @@ async def view_guide(request):
     """Instant static viewer for generated Study Guide HTML."""
     guide_id = request.path_params.get("guide_id")
     clean_id = re.sub(r'[^A-Za-z0-9_-]', '', guide_id)
-    html_target = EXTRACTED_DIR / "study_guides" / f"{clean_id}_Study_Guide.html"
+    guides_dir = EXTRACTED_DIR / "study_guides"
+    guides_dir.mkdir(parents=True, exist_ok=True)
+    html_target = guides_dir / f"{clean_id}_Study_Guide.html"
     if not html_target.exists():
-        html_target = EXTRACTED_DIR / "study_guides" / f"{clean_id}.html"
+        html_target = guides_dir / f"{clean_id}.html"
+
+    # If not on local disk, try fetching from Google Drive
+    if not html_target.exists():
+        drive_service = get_authenticated_drive_service()
+        if drive_service:
+            try:
+                g_data = anki_cli.fetch_study_guide_from_drive(drive_service, clean_id, BASE_DIR)
+                if g_data:
+                    generator.save_study_guide_files(g_data, BASE_DIR, app_base_url="https://anki.maranica.com/")
+            except Exception as de:
+                print("Drive fetch notice for HTML guide:", de)
+
+    if not html_target.exists():
+        # Check case-insensitive match
+        for f in guides_dir.glob("*.html"):
+            if clean_id.lower() in f.stem.lower():
+                html_target = f
+                break
+
     if not html_target.exists():
         return HTMLResponse(
             f'''<!DOCTYPE html>
@@ -1282,16 +1367,114 @@ async def view_guide(request):
 
 
 async def view_guide_pdf(request):
-    """Instant download/view for generated Study Guide PDF."""
+    """Instant download/view for generated Study Guide PDF with on-the-fly rendering."""
     guide_id = request.path_params.get("guide_id")
     clean_id = re.sub(r'[^A-Za-z0-9_-]', '', guide_id)
-    pdf_target = EXTRACTED_DIR / "study_guides" / f"{clean_id}_Study_Guide.pdf"
+    guides_dir = EXTRACTED_DIR / "study_guides"
+    guides_dir.mkdir(parents=True, exist_ok=True)
+    pdf_target = guides_dir / f"{clean_id}_Study_Guide.pdf"
+
+    # 1. Check if PDF already exists
     if not pdf_target.exists():
-        return HTMLResponse(f"Study Guide PDF '{clean_id}' not found.", status_code=404)
-    return FileResponse(
-        str(pdf_target),
-        filename=f"{clean_id}_Study_Guide.pdf",
-        media_type="application/pdf"
+        for f in guides_dir.glob("*.pdf"):
+            if clean_id.lower() in f.stem.lower():
+                pdf_target = f
+                break
+
+    # 2. If PDF not found, check if JSON guide exists and render PDF
+    if not pdf_target.exists():
+        json_target = guides_dir / f"{clean_id}_guide.json"
+        if not json_target.exists():
+            for f in guides_dir.glob("*.json"):
+                if clean_id.lower() in f.stem.lower():
+                    json_target = f
+                    break
+        if json_target.exists():
+            try:
+                g_data = json.loads(json_target.read_text(encoding="utf-8"))
+                generator.render_study_guide_pdf(g_data, pdf_target, app_base_url="https://anki.maranica.com/")
+            except Exception as e:
+                print(f"Error rendering PDF from JSON guide: {e}")
+
+    # 3. If PDF still not found, check if HTML guide exists and render PDF via PyMuPDF Story
+    if not pdf_target.exists():
+        html_target = guides_dir / f"{clean_id}_Study_Guide.html"
+        if not html_target.exists():
+            html_target = guides_dir / f"{clean_id}.html"
+        if not html_target.exists():
+            for f in guides_dir.glob("*.html"):
+                if clean_id.lower() in f.stem.lower():
+                    html_target = f
+                    break
+        if html_target.exists():
+            try:
+                html_str = html_target.read_text(encoding="utf-8")
+                for emoji_char in ["📇 ", "⬅️ ", "📚 ", "🎯 ", "🖼️ ", "⚡ "]:
+                    html_str = html_str.replace(emoji_char, "")
+                mediabox = pymupdf.paper_rect("letter")
+                where = mediabox + (36, 36, -36, -36)
+                story = pymupdf.Story(html=html_str)
+                writer = pymupdf.DocumentWriter(str(pdf_target))
+                more = True
+                while more:
+                    dev = writer.begin_page(mediabox)
+                    more, _ = story.place(where)
+                    story.draw(dev)
+                    writer.end_page()
+                writer.close()
+            except Exception as e:
+                print(f"Error rendering PDF from HTML guide: {e}")
+
+    # 4. If still not found, try fetching from Google Drive
+    if not pdf_target.exists():
+        drive_service = get_authenticated_drive_service()
+        if drive_service:
+            try:
+                g_data = anki_cli.fetch_study_guide_from_drive(drive_service, clean_id, BASE_DIR)
+                if g_data:
+                    generator.save_study_guide_files(g_data, BASE_DIR, app_base_url="https://anki.maranica.com/")
+            except Exception as de:
+                print("Drive fetch notice for PDF guide:", de)
+
+    # 5. Serve PDF if available
+    if pdf_target.exists():
+        return FileResponse(
+            str(pdf_target),
+            filename=f"{clean_id}_Study_Guide.pdf",
+            media_type="application/pdf"
+        )
+
+    # 6. Fallback styled error page
+    return HTMLResponse(
+        f'''<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Study Guide PDF Not Found — Anki Flashcard Studio</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-50 flex items-center justify-center min-h-screen p-4 font-sans text-slate-800">
+  <div class="max-w-md w-full bg-white p-8 rounded-2xl border border-slate-200 shadow-sm text-center space-y-4">
+    <div class="w-14 h-14 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto text-2xl font-bold">
+      📄
+    </div>
+    <h2 class="text-xl font-bold text-slate-900">Study Guide PDF Not Found</h2>
+    <p class="text-xs text-slate-500 leading-relaxed">
+      The PDF study guide for <strong>{html.escape(clean_id)}</strong> could not be located.
+      You can view the web version or generate a new study guide from your flashcard deck.
+    </p>
+    <div class="flex items-center justify-center gap-2 pt-2">
+      <a href="/guide/{clean_id}" class="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-xs font-semibold hover:bg-slate-200 transition">
+        View Web Guide
+      </a>
+      <a href="/" class="px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 transition">
+        Return to Studio
+      </a>
+    </div>
+  </div>
+</body>
+</html>''',
+        status_code=404
     )
 
 
