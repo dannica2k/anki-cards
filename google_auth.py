@@ -8,8 +8,16 @@ import os
 import json
 import hashlib
 import datetime
+import hmac
+import base64
+import time
+import secrets
 from pathlib import Path
-import streamlit as st
+from typing import Optional, Tuple, Dict, Any
+try:
+    import streamlit as st
+except ImportError:
+    st = None
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -23,6 +31,64 @@ SCOPES = [
 ]
 
 TOKEN_CACHE_DIR = Path(__file__).resolve().parent / "extracted" / ".tokens"
+SESSION_COOKIE_NAME = "anki_sid"
+
+
+def get_session_secret() -> str:
+    """Returns a server-side secret key for signing session tokens."""
+    return (
+        safe_get_secret("SECRET_KEY")
+        or safe_get_secret("GOOGLE_CLIENT_SECRET")
+        or "anki-flashcard-secret-salt-2026"
+    )
+
+
+def create_session_token(email: str) -> str:
+    """Generates an HMAC-SHA256 signed session token containing email and sid."""
+    norm_email = email.lower().strip()
+    sid = _get_sid_for_email(norm_email)
+    payload_dict = {
+        "email": norm_email,
+        "sid": sid,
+        "ts": int(time.time()),
+        "nonce": secrets.token_hex(8)
+    }
+    secret = get_session_secret()
+    payload = base64.urlsafe_b64encode(json.dumps(payload_dict).encode("utf-8")).decode("utf-8").rstrip("=")
+    sig = hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{payload}.{sig}"
+
+
+def verify_session_token(token: str, max_age_seconds: int = 30 * 86400) -> Optional[str]:
+    """
+    Verifies an HMAC-signed session token and returns the corresponding sid if valid and not expired.
+    Also supports backward compatibility with direct 16-hex sid if the cache file exists.
+    """
+    if not token or not isinstance(token, str):
+        return None
+    token = token.strip()
+    if "." in token:
+        try:
+            payload, sig = token.split(".", 1)
+            secret = get_session_secret()
+            expected_sig = hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(sig, expected_sig):
+                return None
+            padded = payload + "=" * (-len(payload) % 4)
+            raw = base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8")
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                return None
+            ts = data.get("ts", 0)
+            if (time.time() - ts) > max_age_seconds:
+                return None
+            return data.get("sid")
+        except Exception:
+            return None
+    # Direct sid fallback if local file exists
+    if len(token) <= 64 and (TOKEN_CACHE_DIR / f"{token}.json").exists():
+        return token
+    return None
 
 
 def safe_get_secret(key: str, default: str = "") -> str:
@@ -75,7 +141,7 @@ def _has_stored_refresh_token() -> bool:
     return False
 
 
-def _save_cached_creds(creds: Credentials, email: str) -> str:
+def _save_cached_creds(creds: Credentials, email: str, update_last_active: bool = False) -> str:
     """Saves credentials to disk cache (preserving any prior refresh_token) and returns a short session ID."""
     TOKEN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     sid = _get_sid_for_email(email)
@@ -106,21 +172,29 @@ def _save_cached_creds(creds: Credentials, email: str) -> str:
     }
     serialized = json.dumps(data)
     cache_file.write_text(serialized, encoding="utf-8")
-    # Also save as 'last_active.json' so plain F5 / Ctrl+F5 without query params still restores login
-    last_file.write_text(serialized, encoding="utf-8")
+    if update_last_active:
+        last_file.write_text(serialized, encoding="utf-8")
     return sid
 
 
-def _load_cached_creds(sid: str = None):
+def _load_cached_creds(sid: str = None, allow_fallback: bool = False):
     """
-    Loads credentials from disk cache (either by sid or last_active.json).
-    Constructs Credentials directly so missing refresh_token fields never raise ValueError.
+    Loads credentials from disk cache by sid.
+    When allow_fallback is False (default for web sessions), unauthenticated requests
+    without a valid sid will NEVER load last_active.json, ensuring cross-user isolation.
     """
     TOKEN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    target = TOKEN_CACHE_DIR / f"{sid}.json" if sid else TOKEN_CACHE_DIR / "last_active.json"
-    if not target.exists():
-        target = TOKEN_CACHE_DIR / "last_active.json"
-    if not target.exists():
+    if sid:
+        target = TOKEN_CACHE_DIR / f"{sid}.json"
+        if not target.exists() and allow_fallback:
+            target = TOKEN_CACHE_DIR / "last_active.json"
+    else:
+        if allow_fallback:
+            target = TOKEN_CACHE_DIR / "last_active.json"
+        else:
+            return None, None
+
+    if not target or not target.exists():
         return None, None
     try:
         data = json.loads(target.read_text(encoding="utf-8"))
@@ -159,24 +233,44 @@ def _load_cached_creds(sid: str = None):
         return None, None
 
 
-def clear_cached_creds():
-    """Clears cached login session when user explicitly clicks Log Out."""
-    email = st.session_state.get("google_email")
-    if "google_creds" in st.session_state:
-        del st.session_state["google_creds"]
-    if "google_email" in st.session_state:
-        del st.session_state["google_email"]
-    if email:
-        sid_file = TOKEN_CACHE_DIR / f"{_get_sid_for_email(email)}.json"
-        if sid_file.exists():
+def clear_session_creds(sid: str):
+    """Cleans up the credential cache for a specific session ID without affecting other users."""
+    if not sid:
+        return
+    sid_file = TOKEN_CACHE_DIR / f"{sid}.json"
+    if sid_file.exists():
+        try:
             sid_file.unlink()
+        except Exception:
+            pass
+    # If last_active matches this sid, remove it too
     last_file = TOKEN_CACHE_DIR / "last_active.json"
     if last_file.exists():
-        last_file.unlink()
-    if "sid" in st.query_params:
-        del st.query_params["sid"]
-    if "code" in st.query_params:
-        del st.query_params["code"]
+        try:
+            last_data = json.loads(last_file.read_text(encoding="utf-8"))
+            if last_data.get("sid") == sid:
+                last_file.unlink()
+        except Exception:
+            pass
+
+
+def clear_cached_creds():
+    """Clears cached login session when user explicitly clicks Log Out."""
+    email = None
+    try:
+        email = st.session_state.get("google_email")
+        if "google_creds" in st.session_state:
+            del st.session_state["google_creds"]
+        if "google_email" in st.session_state:
+            del st.session_state["google_email"]
+        if "sid" in st.query_params:
+            del st.query_params["sid"]
+        if "code" in st.query_params:
+            del st.query_params["code"]
+    except Exception:
+        pass
+    if email:
+        clear_session_creds(_get_sid_for_email(email))
 
 
 def init_google_auth(redirect_uri: str):
@@ -194,9 +288,11 @@ def init_google_auth(redirect_uri: str):
     sid_param = query_params.get("sid")
     if not sid_param:
         try:
-            sid_param = st.context.cookies.get("anki_sid")
+            sid_param = st.context.cookies.get(SESSION_COOKIE_NAME)
         except Exception:
             sid_param = None
+    if sid_param:
+        sid_param = verify_session_token(sid_param) or sid_param
 
     # 1. Handle incoming OAuth callback code
     if auth_code and "google_creds" not in st.session_state:
@@ -232,7 +328,7 @@ def init_google_auth(redirect_uri: str):
 
     # 2. Restore from disk cache on F5 / Ctrl+F5 reload if session_state was cleared
     if "google_creds" not in st.session_state:
-        cached_creds, cached_email = _load_cached_creds(sid_param)
+        cached_creds, cached_email = _load_cached_creds(sid_param, allow_fallback=False)
         if cached_creds and cached_email:
             st.session_state["google_creds"] = cached_creds
             st.session_state["google_email"] = cached_email

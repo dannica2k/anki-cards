@@ -9,6 +9,7 @@ import sys
 import json
 import re
 import uuid
+import shutil
 import asyncio
 import html
 import urllib.parse
@@ -58,11 +59,31 @@ def get_oauth_redirect_uri(request: Optional[Any] = None) -> str:
     return "https://anki.maranica.com/"
 
 
-def get_user_session_info(request: Optional[Any] = None) -> Dict[str, Any]:
-    """Retrieves authenticated user session information and profile picture."""
-    cached_creds, cached_email = google_auth._load_cached_creds()
-    is_authenticated = bool(cached_creds and not cached_creds.expired)
+def get_request_sid(request: Optional[Any] = None) -> Optional[str]:
+    """Extracts and verifies session ID from request cookies or query params."""
+    if not request:
+        return None
+    try:
+        raw_cookie = request.cookies.get(google_auth.SESSION_COOKIE_NAME)
+        if raw_cookie:
+            sid = google_auth.verify_session_token(raw_cookie)
+            if sid:
+                return sid
+    except Exception:
+        pass
+    try:
+        query_sid = request.query_params.get("sid")
+        if query_sid:
+            sid = google_auth.verify_session_token(query_sid)
+            if sid:
+                return sid
+    except Exception:
+        pass
+    return None
 
+
+def get_user_session_info(request: Optional[Any] = None) -> Dict[str, Any]:
+    """Retrieves authenticated user session information and profile picture for the active request."""
     # Support previewing authenticated UI via test_user query parameter
     if request and request.query_params.get("test_user"):
         return {
@@ -70,8 +91,12 @@ def get_user_session_info(request: Optional[Any] = None) -> Dict[str, Any]:
             "user_email": "mara@sfu.ca",
             "user_picture": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
             "user_name": "Mara Nica",
-            "cached_creds": cached_creds,
+            "cached_creds": None,
         }
+
+    sid = get_request_sid(request)
+    cached_creds, cached_email = google_auth._load_cached_creds(sid, allow_fallback=False)
+    is_authenticated = bool(cached_creds and not cached_creds.expired)
 
     if not is_authenticated or not cached_email:
         return {
@@ -109,9 +134,11 @@ def get_user_session_info(request: Optional[Any] = None) -> Dict[str, Any]:
     }
 
 
-def get_authenticated_drive_service():
-    """Returns an authenticated Google Drive API service using cached user credentials or environment fallback."""
-    cached_creds, cached_email = google_auth._load_cached_creds()
+def get_authenticated_drive_service(request: Optional[Any] = None, sid: Optional[str] = None):
+    """Returns an authenticated Google Drive API service using cached user credentials for the active request session or sid."""
+    if not sid and request:
+        sid = get_request_sid(request)
+    cached_creds, cached_email = google_auth._load_cached_creds(sid, allow_fallback=False)
     if cached_creds:
         try:
             if cached_creds.expired and cached_creds.refresh_token:
@@ -306,7 +333,20 @@ async def index(request):
                 if name:
                     profile["name"] = name
                 google_auth.save_user_profile(email, profile)
-                return RedirectResponse("/", status_code=303)
+
+                session_token = google_auth.create_session_token(email)
+                response = RedirectResponse("/", status_code=303)
+                proto = request.headers.get("x-forwarded-proto", "")
+                is_secure = request.url.scheme == "https" or "https" in proto
+                response.set_cookie(
+                    key=google_auth.SESSION_COOKIE_NAME,
+                    value=session_token,
+                    max_age=30 * 24 * 3600,
+                    httponly=True,
+                    samesite="lax",
+                    secure=is_secure
+                )
+                return response
         except Exception as e:
             print("OAuth exchange error:", e)
 
@@ -488,18 +528,28 @@ async def modal_account(request):
 
 
 async def auth_logout(request):
-    """Logs out and clears cached Google credentials."""
-    google_auth.clear_cached_creds()
-    return RedirectResponse("/", status_code=303)
+    """Logs out active session, removes its cached creds, and clears the session cookie."""
+    sid = get_request_sid(request)
+    if sid:
+        google_auth.clear_session_creds(sid)
+    response = RedirectResponse("/", status_code=303)
+    response.delete_cookie(google_auth.SESSION_COOKIE_NAME)
+    return response
 
 
 async def save_profile_key(request):
-    """Saves user personal Gemini API key."""
+    """Saves user personal Gemini API key for active session."""
+    user_info = get_user_session_info(request)
+    user_email = user_info.get("user_email")
+    if not user_info.get("is_authenticated") or not user_email:
+        return HTMLResponse(
+            '<div class="p-2.5 bg-rose-50 text-rose-800 rounded-lg text-xs font-semibold border border-rose-200">'
+            'Please sign in with Google to save your personal API key.'
+            '</div>',
+            status_code=401
+        )
     form = await request.form()
     personal_key = form.get("personal_key", "").strip()
-    _, cached_email = google_auth._load_cached_creds()
-    user_email = cached_email or "Local User"
-
     profile = google_auth.get_user_profile(user_email)
     profile["gemini_api_key"] = google_auth.normalize_gemini_api_key(personal_key)
     google_auth.save_user_profile(user_email, profile)
@@ -567,7 +617,7 @@ async def guides_delete(request):
     guide_id = request.query_params.get("id", "").strip()
     if guide_id:
         generator.delete_local_study_guide(guide_id, BASE_DIR)
-        drive_service = get_authenticated_drive_service()
+        drive_service = get_authenticated_drive_service(request)
         if drive_service and hasattr(anki_cli, "delete_study_guide_from_drive"):
             try:
                 anki_cli.delete_study_guide_from_drive(drive_service, guide_id)
@@ -636,9 +686,11 @@ async def courses_delete(request):
     return response
 
 
-def get_api_keys_pool() -> List[str]:
-    """Retrieves list of active Gemini API keys (user profile key + backup key)."""
-    _, cached_email = google_auth._load_cached_creds()
+def get_api_keys_pool(request: Optional[Any] = None, sid: Optional[str] = None) -> List[str]:
+    """Retrieves list of active Gemini API keys (user profile key + backup key) for the active session or sid."""
+    if not sid and request:
+        sid = get_request_sid(request)
+    cached_creds, cached_email = google_auth._load_cached_creds(sid, allow_fallback=False)
     user_email = cached_email or "Local User"
     profile = google_auth.get_user_profile(user_email)
     user_key = profile.get("gemini_api_key", "")
@@ -746,7 +798,7 @@ async def generate_guide_on_demand(request):
                 status_code=400
             )
 
-        keys_pool = get_api_keys_pool()
+        keys_pool = get_api_keys_pool(request)
         main_loop = asyncio.get_running_loop()
         try:
             guide_data = await main_loop.run_in_executor(
@@ -769,7 +821,7 @@ async def generate_guide_on_demand(request):
                     lambda: generator.save_study_guide_files(guide_data, BASE_DIR, app_base_url="https://anki.maranica.com/")
                 )
                 # Sync to Google Drive if authenticated
-                sync_service = get_authenticated_drive_service()
+                sync_service = get_authenticated_drive_service(request)
                 if sync_service:
                     try:
                         g_json = guides_dir / f"{guide_id}_guide.json"
@@ -846,7 +898,7 @@ async def drive_fetch(request):
     last_err = None
 
     # 1. Attempt authenticated download via Google Drive API if user is signed in
-    drive_service = get_authenticated_drive_service()
+    drive_service = get_authenticated_drive_service(request)
     if drive_service:
         try:
             downloaded_path = anki_cli.download_drive_file(drive_service, fid, EXTRACTED_DIR)
@@ -1033,10 +1085,14 @@ async def generate_start(request):
         "session_num": session_num,
     }
 
+    request_sid = get_request_sid(request)
+    app_base_url = get_oauth_redirect_uri(request)
+
     # Start generation in the background
     asyncio.create_task(run_generation_task(
         job_id, pdf_path, filename, course_code, session_num, 
-        density_mode, target_count, custom_guidance, gen_study_guide
+        density_mode, target_count, custom_guidance, gen_study_guide,
+        request_sid=request_sid, app_base_url=app_base_url
     ))
 
     return templates.TemplateResponse(
@@ -1050,9 +1106,98 @@ async def generate_start(request):
     )
 
 
+def compile_course_decks(
+    course_code: str,
+    session_num: str,
+    notes: List[Dict[str, Any]],
+    media_files: List[Any],
+    drive_service: Optional[Any] = None,
+    folder_id: Optional[str] = None,
+    app_base_url: str = "https://anki.maranica.com/"
+) -> Dict[str, Any]:
+    """
+    Builds or updates the Master Course .apkg (overwriting existing session cards)
+    and also generates a standalone session .apkg.
+    """
+    clean_course = course_code.replace(" ", "")
+    tag_str = f"#{clean_course}::Session::{session_num}"
+    if not folder_id:
+        folder_id = os.getenv("TARGET_FOLDER_ID", anki_cli.DEFAULT_SHARED_FOLDER_ID)
+
+    # 1. Attach AI Tutor / Study Guide footer links to notes
+    notes_with_links = generator.attach_footers_to_notes(
+        notes,
+        course_code=course_code,
+        session_num=session_num,
+        app_base_url=app_base_url
+    )
+
+    # 2. Locate baseline master deck (locally or from Google Drive)
+    baseline_apkg = anki_cli.find_baseline_apkg(
+        course_code,
+        BASE_DIR,
+        service=drive_service,
+        folder_id=folder_id
+    )
+    deck_info = anki_cli.get_deck_info_from_apkg(baseline_apkg) if baseline_apkg else None
+
+    if deck_info:
+        canonical_deck_name = deck_info["deck_name"]
+        canonical_file_name = deck_info["file_name"]
+    else:
+        canonical_deck_name = f"{course_code} - Flashcards"
+        canonical_file_name = f"{clean_course} - Flashcards.apkg"
+
+    master_path = EXTRACTED_DIR / canonical_file_name
+
+    # 3. Compile or update master package
+    if baseline_apkg and os.path.exists(str(baseline_apkg)):
+        if Path(baseline_apkg).resolve() != master_path.resolve():
+            shutil.copyfile(str(baseline_apkg), str(master_path))
+        tot_notes, tot_cards = anki_cli.update_existing_apkg(
+            master_path,
+            notes_with_links,
+            tag_str,
+            replace_session_tag=True,
+            media_files=media_files
+        )
+    else:
+        tot_notes, tot_cards = anki_cli.create_new_apkg(
+            master_path,
+            canonical_deck_name,
+            notes_with_links,
+            tag_str,
+            media_files=media_files
+        )
+
+    # 4. Also build standalone session package
+    session_file_name = f"{clean_course}_Session_{session_num}_Cloze.apkg"
+    session_path = EXTRACTED_DIR / session_file_name
+    anki_cli.create_new_apkg(
+        session_path,
+        f"{course_code} - Session {session_num} Cloze",
+        notes_with_links,
+        tag_str,
+        media_files=media_files
+    )
+
+    return {
+        "master_path": master_path,
+        "master_filename": canonical_file_name,
+        "master_deck_name": canonical_deck_name,
+        "session_path": session_path,
+        "session_filename": session_file_name,
+        "total_notes": tot_notes,
+        "total_cards": tot_cards,
+        "notes_with_links": notes_with_links,
+        "tag_str": tag_str,
+    }
+
+
 async def run_generation_task(
     job_id: str, pdf_path: str, filename: str, course_code: str, session_num: str, 
-    density_mode: str, target_count: int, custom_guidance: str, gen_study_guide: bool
+    density_mode: str, target_count: int, custom_guidance: str, gen_study_guide: bool,
+    request_sid: Optional[str] = None, app_base_url: str = "https://anki.maranica.com/"
 ):
     """Background worker for card and study guide generation."""
     queue = JOBS[job_id]["queue"]
@@ -1074,18 +1219,8 @@ async def run_generation_task(
         JOBS[job_id]["slides_data"] = slides_data
         JOBS[job_id]["pdf_path"] = str(pdf)
 
-        # Build keys pool
-        _, cached_email = google_auth._load_cached_creds()
-        user_email = cached_email or "Local User"
-        profile = google_auth.get_user_profile(user_email)
-        user_key = profile.get("gemini_api_key", "")
-        project_key = google_auth.safe_get_secret("GEMINI_API_KEY", "")
-
-        keys_pool = []
-        if user_key:
-            keys_pool.append(user_key)
-        if project_key and project_key != user_key:
-            keys_pool.append(project_key)
+        # Build keys pool for the active request session
+        keys_pool = get_api_keys_pool(sid=request_sid)
 
         await emit_log(
             f"Configured API Key pool ({len(keys_pool)} keys). Generating {target_count} cards ({density_mode})...", 
@@ -1119,31 +1254,31 @@ async def run_generation_task(
         notes = payload.get("notes", [])
         media_files = payload.get("media_files", [])
 
-        await emit_log(f"Generated {len(notes)} Cloze cards. Building Anki package (.apkg)...", percent=75, stage_title="Packaging Anki Deck")
+        await emit_log(f"Generated {len(notes)} Cloze cards. Building Anki packages...", percent=75, stage_title="Packaging Anki Decks")
 
-        # Compile Anki deck
-        clean_course = course_code.replace(" ", "")
-        deck_filename = f"{clean_course}_Session_{session_num}_Cloze.apkg"
-        output_apkg = EXTRACTED_DIR / deck_filename
-        deck_name = f"{course_code} - Session {session_num} Cloze"
+        drive_service = get_authenticated_drive_service(sid=request_sid)
+        folder_id = os.getenv("TARGET_FOLDER_ID", anki_cli.DEFAULT_SHARED_FOLDER_ID)
 
-        notes_with_links = generator.attach_footers_to_notes(
-            notes,
-            course_code=course_code,
-            session_num=session_num,
-            app_base_url="http://localhost:8000/"
-        )
-
-        await main_loop.run_in_executor(
+        deck_res = await main_loop.run_in_executor(
             None,
-            lambda: anki_cli.create_new_apkg(
-                output_apkg,
-                deck_name,
-                notes_with_links,
-                f"#{clean_course}::Session::{session_num}",
-                media_files=media_files
+            lambda: compile_course_decks(
+                course_code=course_code,
+                session_num=session_num,
+                notes=notes,
+                media_files=media_files,
+                drive_service=drive_service,
+                folder_id=folder_id,
+                app_base_url=app_base_url
             )
         )
+        canonical_deck_name = deck_res["master_deck_name"]
+        canonical_file_name = deck_res["master_filename"]
+        session_apkg_name = deck_res["session_filename"]
+        tot_notes = deck_res["total_notes"]
+        master_output_apkg = deck_res["master_path"]
+
+        clean_course = course_code.replace(" ", "")
+        await emit_log(f"Packaged master deck '{canonical_deck_name}' ({tot_notes} total notes, replaced #{clean_course}::Session::{session_num}).", percent=80)
 
         guide_id = None
         if gen_study_guide:
@@ -1158,7 +1293,7 @@ async def run_generation_task(
                         custom_focus="",
                         base_dir=BASE_DIR,
                         api_keys_pool=keys_pool,
-                        app_base_url="http://localhost:8000/"
+                        app_base_url=app_base_url
                     )
                 )
                 if guide_data:
@@ -1166,28 +1301,41 @@ async def run_generation_task(
                     guide_data["guide_id"] = guide_id
                     await main_loop.run_in_executor(
                         None,
-                        lambda: generator.save_study_guide_files(guide_data, BASE_DIR, app_base_url="https://anki.maranica.com/")
+                        lambda: generator.save_study_guide_files(guide_data, BASE_DIR, app_base_url=app_base_url)
                     )
                     await emit_log(f"Study Guide created & saved: {guide_id}", percent=95)
                     # Sync to Google Drive if authenticated
-                    sync_service = get_authenticated_drive_service()
-                    if sync_service:
+                    if drive_service:
                         try:
                             g_json = BASE_DIR / "extracted" / "study_guides" / f"{guide_id}_guide.json"
                             g_html = BASE_DIR / "extracted" / "study_guides" / f"{guide_id}_Study_Guide.html"
                             g_pdf = BASE_DIR / "extracted" / "study_guides" / f"{guide_id}_Study_Guide.pdf"
                             if g_json.exists() and g_html.exists():
                                 anki_cli.sync_study_guide_to_drive(
-                                    sync_service,
+                                    drive_service,
                                     g_json,
                                     g_html,
+                                    folder_id=folder_id,
                                     pdf_path=g_pdf if g_pdf.exists() else None
                                 )
-                                await emit_log("Study Guide synced to Google Drive!", percent=98)
+                                await emit_log("Study Guide synced to Google Drive!", percent=97)
                         except Exception as sync_e:
                             print("Drive sync notice:", sync_e)
             except Exception as e:
                 await emit_log(f"Warning: Study guide generation error: {e}", percent=90)
+
+        # Sync Master Deck to Google Drive if authenticated
+        if drive_service:
+            try:
+                await emit_log(f"Syncing updated master deck to Google Drive ({canonical_file_name})...", percent=98)
+                remote_res = await main_loop.run_in_executor(
+                    None,
+                    lambda: anki_cli._upsert_drive_file(drive_service, master_output_apkg, folder_id=folder_id)
+                )
+                if remote_res:
+                    await emit_log("Master deck synced to Google Drive!", percent=99)
+            except Exception as de:
+                print("Drive master deck sync notice:", de)
 
         # Format cards for preview & editor
         for c in notes:
@@ -1206,14 +1354,18 @@ async def run_generation_task(
         JOBS[job_id]["result"] = {
             "job_id": job_id,
             "cards": notes,
-            "deck_name": deck_name,
-            "deck_filename": deck_filename,
+            "deck_name": canonical_deck_name,
+            "deck_filename": canonical_file_name,
+            "session_filename": session_apkg_name,
+            "total_notes": tot_notes,
             "guide_id": guide_id,
             "course_code": course_code,
             "session_num": session_num,
             "media_files": media_files,
             "slides_data": slides_data,
             "pdf_path": str(pdf),
+            "request_sid": request_sid,
+            "app_base_url": app_base_url,
         }
         JOBS[job_id]["status"] = "complete"
 
@@ -1246,6 +1398,8 @@ async def generate_stream(request):
                             "cards": res["cards"],
                             "deck_name": res["deck_name"],
                             "deck_filename": res["deck_filename"],
+                            "session_filename": res.get("session_filename"),
+                            "total_notes": res.get("total_notes"),
                             "guide_id": res["guide_id"],
                             "course_code": res.get("course_code", ""),
                             "session_num": res.get("session_num", ""),
@@ -1321,16 +1475,62 @@ async def generate_stream(request):
 # ============================================================================
 
 async def download_deck(request):
-    """Serves the generated .apkg file for download."""
+    """Serves the generated or master .apkg file for download."""
     deck_filename = request.path_params.get("deck_filename")
     target = EXTRACTED_DIR / deck_filename
+    if not target.exists():
+        # Case-insensitive fallback lookup
+        for f in EXTRACTED_DIR.glob("*.apkg"):
+            if f.name.lower() == deck_filename.lower():
+                target = f
+                break
     if not target.exists():
         return HTMLResponse("Deck not found", status_code=404)
     return FileResponse(
         str(target),
-        filename=deck_filename,
+        filename=target.name,
         media_type="application/octet-stream"
     )
+
+
+async def sync_deck_to_drive(request):
+    """Syncs the master .apkg to Google Drive."""
+    job_id = request.query_params.get("job_id")
+    if not job_id or job_id not in JOBS or "result" not in JOBS[job_id]:
+        return HTMLResponse('<span class="text-xs text-red-600 font-semibold">Session expired. Please re-generate.</span>', status_code=400)
+
+    res = JOBS[job_id]["result"]
+    deck_filename = res.get("deck_filename")
+    apkg_path = EXTRACTED_DIR / deck_filename
+    if not apkg_path.exists():
+        return HTMLResponse('<span class="text-xs text-red-600 font-semibold">Deck file not found on disk.</span>', status_code=404)
+
+    drive_service = get_authenticated_drive_service(request)
+    if not drive_service:
+        return HTMLResponse('<span class="text-xs text-amber-700 font-semibold">Please sign in with Google to sync to Drive.</span>', status_code=401)
+
+    folder_id = os.getenv("TARGET_FOLDER_ID", anki_cli.DEFAULT_SHARED_FOLDER_ID)
+    main_loop = asyncio.get_running_loop()
+    try:
+        remote = await main_loop.run_in_executor(
+            None,
+            lambda: anki_cli._upsert_drive_file(drive_service, apkg_path, folder_id=folder_id)
+        )
+        web_link = remote.get("webViewLink", f"https://drive.google.com/drive/folders/{folder_id}")
+        return HTMLResponse(
+            f'<div class="flex items-center gap-1.5 text-xs text-emerald-800 bg-emerald-100/90 px-3 py-1.5 rounded-xl border border-emerald-300 shadow-2xs animate-in fade-in">'
+            f'  <span class="material-icons text-sm text-emerald-600">cloud_done</span>'
+            f'  <span>Synced to Google Drive!</span>'
+            f'  <a href="{web_link}" target="_blank" class="underline font-semibold ml-1 hover:text-emerald-950">Open in Drive</a>'
+            f'</div>'
+        )
+    except Exception as e:
+        return HTMLResponse(
+            f'<div class="text-xs text-red-700 bg-red-50 px-3 py-1.5 rounded-xl border border-red-200">'
+            f'Drive sync error: {html.escape(str(e))}'
+            f'</div>',
+            status_code=500
+        )
 
 
 async def view_guide(request):
@@ -1345,7 +1545,7 @@ async def view_guide(request):
 
     # If not on local disk, try fetching from Google Drive
     if not html_target.exists():
-        drive_service = get_authenticated_drive_service()
+        drive_service = get_authenticated_drive_service(request)
         if drive_service:
             try:
                 g_data = anki_cli.fetch_study_guide_from_drive(drive_service, clean_id, BASE_DIR)
@@ -1454,7 +1654,7 @@ async def view_guide_pdf(request):
 
     # 4. If still not found, try fetching from Google Drive
     if not pdf_target.exists():
-        drive_service = get_authenticated_drive_service()
+        drive_service = get_authenticated_drive_service(request)
         if drive_service:
             try:
                 g_data = anki_cli.fetch_study_guide_from_drive(drive_service, clean_id, BASE_DIR)
@@ -1557,33 +1757,52 @@ async def update_deck(request):
 
     res["cards"] = updated_cards
 
-    # Rebuild the .apkg
-    notes_with_links = generator.attach_footers_to_notes(
-        updated_cards,
-        course_code=course_code,
-        session_num=session_num,
-        app_base_url="http://localhost:8000/"
-    )
+    request_sid = res.get("request_sid") or get_request_sid(request)
+    app_base_url = res.get("app_base_url") or get_oauth_redirect_uri(request)
+    drive_service = get_authenticated_drive_service(request, sid=request_sid)
+    folder_id = os.getenv("TARGET_FOLDER_ID", anki_cli.DEFAULT_SHARED_FOLDER_ID)
+
+    # Rebuild the Master .apkg and standalone session package
     main_loop = asyncio.get_running_loop()
-    await main_loop.run_in_executor(
+    deck_res = await main_loop.run_in_executor(
         None,
-        lambda: anki_cli.create_new_apkg(
-            output_apkg,
-            deck_name,
-            notes_with_links,
-            f"#{clean_course}::Session::{session_num}",
-            media_files=media_files
+        lambda: compile_course_decks(
+            course_code=course_code,
+            session_num=session_num,
+            notes=updated_cards,
+            media_files=media_files,
+            drive_service=drive_service,
+            folder_id=folder_id,
+            app_base_url=app_base_url
         )
     )
+    res["deck_name"] = deck_res["master_deck_name"]
+    res["deck_filename"] = deck_res["master_filename"]
+    res["session_filename"] = deck_res["session_filename"]
+    res["total_notes"] = deck_res["total_notes"]
+
+    # Sync to Google Drive if authenticated
+    if drive_service:
+        try:
+            await main_loop.run_in_executor(
+                None,
+                lambda: anki_cli._upsert_drive_file(drive_service, deck_res["master_path"], folder_id=folder_id)
+            )
+        except Exception as de:
+            print("Drive deck sync notice on update:", de)
 
     banner_html = templates.get_template("partials/deck_banner.html").render(
         {
             "job_id": job_id,
             "cards": updated_cards,
-            "deck_name": deck_name,
+            "deck_name": res["deck_name"],
             "deck_filename": res["deck_filename"],
+            "session_filename": res.get("session_filename"),
+            "total_notes": res.get("total_notes"),
             "guide_id": res.get("guide_id"),
-            "success_msg": f"✨ Deck successfully updated & rebuilt with {len(updated_cards)} cards!"
+            "course_code": course_code,
+            "session_num": session_num,
+            "success_msg": f"✨ Deck successfully updated & rebuilt! Master deck total: {res.get('total_notes')} cards."
         }
     )
     return HTMLResponse(banner_html)
@@ -1636,7 +1855,8 @@ routes = [
     Route("/api/upload", endpoint=direct_upload, methods=["POST"]),
     Route("/api/generate/start", endpoint=generate_start, methods=["POST"]),
     Route("/api/generate/stream", endpoint=generate_stream, methods=["GET"]),
-    Route("/api/deck/download/{deck_filename}", endpoint=download_deck, methods=["GET"]),
+    Route("/api/deck/download/{deck_filename:path}", endpoint=download_deck, methods=["GET"]),
+    Route("/api/deck/sync", endpoint=sync_deck_to_drive, methods=["POST"]),
     Route("/api/deck/update", endpoint=update_deck, methods=["POST"]),
     Route("/api/card/add", endpoint=add_card, methods=["POST"]),
     Route("/api/media/{filename:path}", endpoint=serve_media, methods=["GET"]),

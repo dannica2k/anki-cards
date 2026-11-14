@@ -15,17 +15,44 @@
       </div>
       <h3 class="text-xl font-bold text-slate-900 mt-1">{{ deck_name }}</h3>
       <p class="text-sm text-slate-600 mt-0.5">
-        <span class="font-bold text-slate-800"><span id="deck-card-count">{{ cards|length }}</span> exam-ready Cloze cards</span> with coordinated active-recall tiers & AI Tutor links.
+        <span class="font-bold text-slate-800"><span id="deck-card-count">{{ cards|length }}</span> cards in this session</span>
+        {% if total_notes and total_notes != cards|length %}
+        • <span class="text-slate-700 font-semibold">Master deck total: {{ total_notes }} cards</span>
+        {% endif %}
+        with coordinated active-recall tiers & AI Tutor links.
       </p>
     </div>
 
     <!-- Action Buttons -->
     <div class="flex flex-wrap items-center gap-2.5">
       <a id="btn-download-apkg" href="/api/deck/download/{{ deck_filename }}" 
-         class="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl shadow-sm hover:shadow transition flex items-center gap-2 text-sm">
+         class="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl shadow-sm hover:shadow transition flex items-center gap-2 text-sm"
+         title="Download cumulative Master Deck for this course">
         <span class="material-icons text-lg">download</span>
-        <span>Download Anki Deck (.apkg)</span>
+        <span>Download Master Deck (.apkg)</span>
       </a>
+
+      {% if session_filename and session_filename != deck_filename %}
+      <a id="btn-download-session-apkg" href="/api/deck/download/{{ session_filename }}" 
+         class="px-3.5 py-2.5 bg-white hover:bg-slate-50 text-slate-700 font-semibold rounded-xl border border-slate-200 shadow-xs transition flex items-center gap-1.5 text-sm"
+         title="Download standalone package with only this session's cards">
+        <span class="material-icons text-lg text-emerald-600">file_download</span>
+        <span>Session Only</span>
+      </a>
+      {% endif %}
+
+      <div id="deck-sync-slot" class="inline-flex items-center">
+        <button type="button"
+                hx-post="/api/deck/sync?job_id={{ job_id }}"
+                hx-target="#deck-sync-slot"
+                hx-indicator="#sync-spinner"
+                class="px-3.5 py-2.5 bg-white hover:bg-emerald-50 text-emerald-800 font-semibold rounded-xl border border-emerald-200 shadow-xs transition flex items-center gap-1.5 text-sm"
+                title="Sync and update master deck in Google Drive">
+          <span id="sync-spinner" class="htmx-indicator material-icons text-sm animate-spin">sync</span>
+          <span class="material-icons text-lg text-emerald-600">cloud_upload</span>
+          <span>Sync to Drive</span>
+        </button>
+      </div>
 
       {% if guide_id %}
       <a href="/guide/{{ guide_id }}" target="_blank"
