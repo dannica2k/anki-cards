@@ -24,10 +24,10 @@ Copy this file to `references/<course-code-lowercase>.md` when setting up a new 
 
 ---
 
-## 3. The "Support-Only" Extra Field Rule & Extra Extraction Principle
-- **Support-Only Extra:** The `extra` field exists strictly to support the tested clozes (via diagram grounding `<img src="...">`, cross-referencing other cards, or a 1-sentence physiological/mechanistic rationale). It must NEVER introduce new, untested concepts or structures.
-- **The Testability Axiom:** If a piece of information is testable on an exam, it MUST have its own active-recall Cloze card.
-- **Extra Extraction Check:** Before finalizing `extra`, ask: *"Does this contain a key term, mechanism, or step that could be asked on an exam?"* If YES, extract it out into a dedicated card and keep `extra` strictly supportive!
+## 3. Chronological Slide Sequencing & Image/Clarification-Only Extra Field Rule
+- **Chronological Slide Sequence:** Generate cards in strict ascending slide order (`Slide 1`, then `Slide 2`, then `Slide 3`, etc.). Never jump back and forth between slides.
+- **100% Testable Coverage Check:** Audit every slide so all testable material is directly tested inside `{{c1::...}}`/`{{c2::...}}`/`{{c3::...}}` clozes in `text`.
+- **Image & Clarification-Only `extra`:** The `extra` field must ONLY contain the embedded slide diagram (`<img src="...">`) and/or a brief 1-sentence visual pointer or non-testable clarification. NEVER place testable subject matter in `extra`—if `extra` contains a testable fact, extract it out into a dedicated card on that slide!
 
 ---
 

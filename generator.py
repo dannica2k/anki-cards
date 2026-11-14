@@ -21,8 +21,17 @@ from google.genai import types
 
 
 class FlashcardNote(BaseModel):
-    text: str = Field(description="Card front text with {{c1::...}}, {{c2::...}}, {{c3::...}} cloze deletions. Use HTML (<br>, <b>) and Unicode symbols (ΔG′°, α, β, γ, ⇌, →, ⁺, ²⁺, ₂) instead of LaTeX backslashes.")
-    extra: str = Field(default="", description="Concise high-yield explanation, physiological rationale, or embedded figure tag <img src=\"...\">. Use Unicode symbols instead of LaTeX.")
+    slide_number: int = Field(
+        default=1,
+        description="The 1-based slide/page number where this concept appears. You MUST generate notes in strict ascending slide_number order (Slide 1, then Slide 2, then Slide 3, etc.) without jumping back and forth between slides."
+    )
+    text: str = Field(
+        description="Card front text with {{c1::...}}, {{c2::...}}, {{c3::...}} active-recall cloze deletions testing ALL exam-testable facts on this slide. Use HTML (<br>, <b>) and Unicode symbols (ΔG′°, α, β, γ, ⇌, →, ⁺, ²⁺, ₂) instead of LaTeX backslashes."
+    )
+    extra: str = Field(
+        default="",
+        description="STRICTLY limited to an embedded slide figure (<img src=\"...\">) and/or a brief 1-sentence non-testable clarification. NEVER place testable subject matter, definitions, reaction types, ΔG values, regulators, cofactors, or mechanisms in extra—all testable facts MUST be tested via {{c1::...}} clozes in `text` or spawned as their own FlashcardNote."
+    )
 
 
 class FlashcardDeckPayload(BaseModel):
@@ -139,29 +148,42 @@ def extract_pdf_assets(pdf_path: str, output_dir: Path) -> Dict[str, Any]:
     layout = detect_pdf_layout(doc)
 
     slides_data = []
-    section_patterns = re.compile(r'(?:Section\s+|SECTION\s+)?\b(\d+[a-zA-Z]?(?:\.\d+)+)\s+([^\n]{3,50})', re.IGNORECASE)
+    unit_blacklist = re.compile(
+        r'^(?:kJ|kcal|J|cal|mol|mmol|μmol|umol|nmol|M|mM|μM|uM|nM|pM|mg|g|kg|μg|ug|ng|L|mL|μL|uL|'
+        r'Hz|kHz|ms|s|sec|min|hr|h|nm|μm|um|mm|cm|m|km|V|mV|pH|atm|bar|Pa|kPa|%|°C|K|Da|kDa|Å|'
+        r'BPG|bisphosphoglycerate|fold|times|x)\b',
+        re.IGNORECASE
+    )
+    section_line_pattern = re.compile(
+        r'^\s*(?:(?:Section|Topic|Part|Module)\s+(\d{1,2}[a-zA-Z]?(?:\.\d+)*)|(\d{1,2}[a-zA-Z]?(?:\.\d+)+))\s*[:.\-–—)]?\s+([A-Z][A-Za-z0-9\s,\-–—/\'’]{2,55})\s*$'
+    )
     all_sections_detected = []
 
     for pno in range(total_pages):
         page = doc[pno]
         text_blocks = []
         b_list = page.get_text("blocks")
-        page_text = ""
+        page_sections = []
 
         for b in b_list:
-            t = b[4].strip().replace('\n', ' ')
+            raw_block = b[4].strip()
+            if not raw_block:
+                continue
+            for raw_line in raw_block.splitlines():
+                line_clean = raw_line.strip()
+                m_sec = section_line_pattern.match(line_clean)
+                if m_sec:
+                    sec_num = (m_sec.group(1) or m_sec.group(2) or "").strip()
+                    sec_title = (m_sec.group(3) or "").strip()
+                    if sec_num and sec_title and not unit_blacklist.match(sec_title):
+                        clean_sec = f"{sec_num} {sec_title[:40]}".strip()
+                        if clean_sec not in page_sections:
+                            page_sections.append(clean_sec)
+                        if clean_sec not in all_sections_detected:
+                            all_sections_detected.append(clean_sec)
+            t = raw_block.replace('\n', ' ')
             if t:
                 text_blocks.append(t)
-                page_text += " " + t
-
-        # Find section headings
-        found_sections = section_patterns.findall(page_text)
-        page_sections = []
-        for sec_num, sec_title in found_sections:
-            clean_sec = f"{sec_num.strip()} {sec_title.strip()[:40]}"
-            page_sections.append(clean_sec)
-            if clean_sec not in all_sections_detected:
-                all_sections_detected.append(clean_sec)
 
         # Save rendered slide snapshot
         slide_img_name = f"slide_{pno+1:02d}.png"
@@ -221,11 +243,13 @@ def analyze_lecture_pdf(
     extract_dir.mkdir(parents=True, exist_ok=True)
     cache_file = extract_dir / "audit.json"
 
-    # Return cached audit if PDF hasn't been modified
+    # Return cached audit if PDF hasn't been modified and schema version is current
     if cache_file.exists():
         try:
             if os.path.getmtime(str(cache_file)) >= os.path.getmtime(pdf_path):
-                return json.loads(cache_file.read_text(encoding="utf-8"))
+                cached = json.loads(cache_file.read_text(encoding="utf-8"))
+                if cached.get("audit_version") == 2:
+                    return cached
         except Exception:
             pass
 
@@ -270,6 +294,7 @@ def analyze_lecture_pdf(
         gap_warnings.append(f"📄 **Dense Letter Format Detected:** This lecture contains **{layout['avg_words_per_page']} words/page** across **{num_sections} numbered sections**. Generating in **Regular Recap** or **Deep Dive** is recommended to ensure every mechanism is actively tested.")
 
     result = {
+        "audit_version": 2,
         "layout": layout,
         "total_pages": total_pages,
         "sections": sections,
@@ -293,14 +318,68 @@ def analyze_lecture_pdf(
 
 
 DEFAULT_MODELS_TO_TRY = [
-    "gemini-3.8-flash",        # Tier 1: Primary flagship 3.8 Flash (best multimodal & structured reasoning)
-    "gemini-3.7-flash",        # Tier 2: High-accuracy structured multimodal 3.7 Flash
-    "gemini-3.5-flash",        # Tier 3: Proven flagship 3.5 Flash
-    "gemini-3-flash-preview",  # Tier 4: High-capacity Gemini 3 Flash
-    "gemini-2.5-flash",        # Tier 5: Stable 2.5 Flash
-    "gemini-3.5-flash-lite",   # Tier 6: High-quota 3.5 Flash Lite (last-resort fallback)
-    "gemini-3.1-flash-lite",   # Tier 7: Backup high-quota Lite tier
+    "gemini-3.5-flash",        # Tier 1: Primary flagship 3.5 Flash (highest quality & accuracy)
+    "gemini-3-flash-preview",  # Tier 2: Full Gemini 3 Flash fallback
+    "gemini-2.5-flash",        # Tier 3: Stable 2.5 Flash fallback
+    "gemini-3.5-flash-lite",   # Tier 4: High-quota 3.5 Flash Lite (last-resort fallback)
+    "gemini-3.1-flash-lite",   # Tier 5: Backup high-quota Lite tier
 ]
+
+
+def _create_genai_client(api_key: str, timeout_ms: int = 60_000) -> genai.Client:
+    """
+    Creates a Gemini client with a strict per-request timeout and single attempt
+    (disabling hidden multi-minute SDK backoff loops) so model/key failover is immediate.
+    """
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(
+            timeout=timeout_ms,
+            retry_options=types.HttpRetryOptions(attempts=1)
+        )
+    )
+
+
+def _generate_with_thinking(
+    client: genai.Client,
+    model: str,
+    contents: List[Any],
+    system_instruction: str,
+    response_schema: Any,
+    temperature: float = 0.25,
+    thinking_budget: int = 4096
+):
+    """
+    Invokes `client.models.generate_content` with a bounded `thinking_budget` (default 4096 tokens)
+    so the model has full reasoning depth for 4–6 cards without stalling in runaway thinking loops.
+    Automatically retries without `thinking_config` if an endpoint does not support it.
+    """
+    try:
+        return client.models.generate_content(
+            model=model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                response_mime_type="application/json",
+                response_schema=response_schema,
+                temperature=temperature,
+                thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget)
+            )
+        )
+    except Exception as e:
+        err_lower = str(e).lower()
+        if "thinking" in err_lower or ("400" in err_lower and "invalid_argument" in err_lower):
+            return client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    response_mime_type="application/json",
+                    response_schema=response_schema,
+                    temperature=temperature
+                )
+            )
+        raise
 
 
 def _ordered_candidate_models(preferred_model: Optional[str], dead_models: set) -> List[str]:
@@ -538,45 +617,49 @@ Density Setting: {density_mode}
 {course_rules}
 
 ### CARD GENERATION MANDATES:
-1. **THE "SUPPORT-ONLY" EXTRA FIELD RULE (ZERO UNTESTED CONCEPTS IN EXTRA)**:
-   - The 'extra' field must **STRICTLY SUPPORT** the card's tested clozes; it must **NEVER INTRODUCE NEW OR DEEPER UNTESTED CONCEPTS**.
-   - **The Testability Axiom**: If a piece of information is substantive enough to appear on an exam (a specific anatomical structure, mechanism, ion channel, receptor type, threshold, equation, or clinical effect), it **MUST BE TESTED AS AN ACTIVE-RECALL CLOZE NOTE**. It cannot live solely inside 'extra'.
-   - **What BELONGS in 'extra'**:
-     • **Diagram Grounding**: An embedded figure tag (`<img src="FILENAME">`) with a single concise sentence directing the student to observe the specific visual cue that confirms the clozed answer.
-     • **Cross-Referencing Tested Concepts**: Explicit connections or contrasts to other cards in the deck (e.g., *"Contrast with Card on Utricle..."*).
-     • **Direct Rationale ("The Why")**: A 1-sentence physiological, anatomical, or chemical explanation reinforcing *why* the clozed relationship is true.
-   - **What is STRICTLY FORBIDDEN in 'extra'**:
-     • Writing long textbook summaries that explain new physiological cascades, named pathways, or experimental nuances that lack their own flashcard.
-2. **THE "EXTRA EXTRACTION" PRINCIPLE (CARD SPAWNING)**:
-   - Before writing the 'extra' field of any note, perform this check:
-     *"Does this explanation contain a key concept, term, step, or relationship that a professor could test on an exam?"*
-     If **YES**, you MUST **EXTRACT IT OUT** and generate a dedicated active-recall Cloze card for it! Keep the original card's 'extra' brief and strictly supportive.
+0. **CHRONOLOGICAL SLIDE-BY-SLIDE SEQUENCING RULE (STRICT SLIDE ORDER)**:
+   - You MUST process slides in **strict ascending numerical order** (e.g., all cards for Slide 1 first, then all cards for Slide 2, then Slide 3, etc.).
+   - **NEVER jump back and forth between slides** in your card sequence.
+   - Set `slide_number` accurately on every `FlashcardNote` to match the 1-based slide number where that concept appears.
+   - Within a single slide, place any overarching **Parent / Roadmap Card** first, immediately followed by its **Child / Mechanism Cards** for that same slide before advancing to the next slide.
+1. **100% TESTABLE MATERIAL COVERAGE & IMAGE/CLARIFICATION-ONLY EXTRA FIELD RULE**:
+   - **Complete Testable Coverage Mandate**: Every single exam-testable fact on each slide (definitions, pathways, reaction types, enzymes, cofactors, ΔG′° values, allosteric activators/inhibitors, catalytic residues, anatomical structures, physiological mechanisms, and experimental results) **MUST BE COVERED BY ACTIVE-RECALL CLOZE CARDS** (`{{{{c1::...}}}}`, `{{{{c2::...}}}}`, `{{{{c3::...}}}}` in `text`).
+   - **What BELONGS in `extra` (STRICTLY IMAGES & BRIEF CLARIFICATION)**:
+     • **Slide Images / Diagrams**: An embedded figure tag (`<img src="FILENAME">`) when an extracted figure exists for that slide.
+     • **Brief Clarification Only**: At most a short 1-sentence visual pointer or non-testable clarifying note (or leave `extra` empty `""` if no image or clarification is needed).
+   - **What is STRICTLY FORBIDDEN in `extra`**:
+     • **NEVER** place testable subject matter, definitions, reaction classifications, ΔG′° numbers, allosteric regulators, cofactors, anatomical pathways, or physiological cascades in `extra`.
+2. **THE "EXTRA EXTRACTION" & COVERAGE AUDIT RULE (CARD SPAWNING)**:
+   - Before outputting your JSON notes for a batch, perform a mandatory **Coverage & Extra Audit** across every slide in the batch:
+     1) *Is every testable concept on Slide X covered by an active-recall Cloze deletion in `text`?*
+     2) *Does any card's `extra` field contain a testable fact, term, reaction type, regulator, ΔG′° value, or mechanism?*
+   - If **YES** to (2), or if any testable concept on a slide is missing a card, you **MUST remove the testable material from `extra` and spawn a dedicated `FlashcardNote` for that slide** (placed in proper slide sequence). Treat the requested card count as a baseline minimum—always generate additional cards rather than burying testable material in `extra`.
    - **Benchmark Comparison**:
-     ❌ *BAD (Buried Mechanisms in Extra):*
-       Text: "The {{c1::utricle}} senses acceleration in the horizontal plane."
+     ❌ *BAD (Buried Testable Material in Extra):*
+       Text: "The {{{{c1::utricle}}}} senses acceleration in the horizontal plane."
        Extra: "<img src="fig.png"><br>The utricle contains calcium carbonate stones called otoconia resting atop a gelatinous otolithic membrane. Underneath, hair cells have stereocilia that bend towards a single tall kinocilium to open mechanically gated potassium channels (K+ influx), causing depolarization."
-       *(Otoconia, kinocilium, K+ influx, and depolarization are high-yield exam concepts, but the student is never quizzed on them!)*
-     ✅ *GOOD (Extracted into Dedicated Cards):*
-       • Card 1 (Organ & Plane): "Within the otolith organs, the {{c1::saccule}} senses acceleration in {{c2::the vertical plane}}, whereas the {{c1::utricle}} senses acceleration in {{c2::the horizontal plane}} as well as {{c2::head tilt}} relative to gravity."
-         Extra: "<img src="fig.png"><br><b>Spatial Orientation:</b> Utricle macula is oriented horizontally; saccule macula is oriented vertically."
-       • Card 2 (Hair Cell Transduction): "In vestibular hair cells, bundle deflection {{c1::towards}} the kinocilium opens mechanically gated channels causing {{c2::K⁺ influx and depolarization}}, whereas deflection {{c1::away from}} the kinocilium causes {{c2::hyperpolarization}}."
-         Extra: "<b>Ionic Basis:</b> High K⁺ in endolymph drives passive K⁺ entry into hair cells upon mechanical gating."
-       • Card 3 (Otoconia & Inertia): "The otolithic membrane consists of a gelatinous matrix weighted by dense calcium carbonate crystals called {{c1::otoconia}}, which impart {{c2::inertial mass}} that deflects underlying hair cell bundles during linear acceleration."
-         Extra: "<b>Function:</b> High density of otoconia causes inertial lag behind head movement, shearing the hair bundles."
+       *(Otoconia, kinocilium, K+ influx, and depolarization are testable exam concepts buried in extra!)*
+     ✅ *GOOD (Extracted into Dedicated Cards, Extra has Image + Brief Clarification Only):*
+       • Card 1 (Slide 4 - Organ & Plane): "Within the otolith organs, the {{{{c1::saccule}}}} senses acceleration in {{{{c2::the vertical plane}}}}, whereas the {{{{c1::utricle}}}} senses acceleration in {{{{c2::the horizontal plane}}}} as well as {{{{c2::head tilt}}}} relative to gravity."
+         Extra: "<img src="fig.png"><br><b>Diagram note:</b> Notice the perpendicular orientation of the utricular and saccular maculae."
+       • Card 2 (Slide 4 - Otoconia & Inertia): "The otolithic membrane consists of a gelatinous matrix weighted by dense calcium carbonate crystals called {{{{c1::otoconia}}}}, which impart {{{{c2::inertial mass}}}} that deflects underlying hair cell bundles during linear acceleration."
+         Extra: ""
+       • Card 3 (Slide 4 - Hair Cell Transduction): "In vestibular hair cells, bundle deflection {{{{c1::towards}}}} the kinocilium opens mechanically gated channels causing {{{{c2::K⁺ influx and depolarization}}}}, whereas deflection {{{{c1::away from}}}} the kinocilium causes {{{{c2::hyperpolarization}}}}."
+         Extra: ""
 3. **HIERARCHICAL SPACED REPETITION (PARENT / CHILD CARDS)**:
    - For multi-part topics or numbered lists (e.g. 3 techniques to study proprioception):
      a) Create an overarching **Parent / Roadmap Card** testing the overall category names and count.
-     b) Create dedicated **Child / Deep-Dive Cards** drilling into the exact mechanisms, experimental observations, and physiological distinctions of EACH item.
+     b) Immediately follow it (on the same slide) with dedicated **Child / Deep-Dive Cards** drilling into the exact mechanisms, experimental observations, and physiological distinctions of EACH item.
 4. **COORDINATED FUNCTIONAL CLOZE GROUPING (TIERED CATEGORY & DETAIL RULE)**:
-   - When testing contrasting pairs, anatomical structures, or categorized lists, NEVER assign sequential arbitrary cloze numbers (e.g., {{c1::A}} ({{c2::X}}) and {{c3::B}} ({{c4::Y}})).
+   - When testing contrasting pairs, anatomical structures, or categorized lists, NEVER assign sequential arbitrary cloze numbers (e.g., {{{{c1::A}}}} ({{{{c2::X}}}}) and {{{{c3::B}}}} ({{{{c4::Y}}}})).
    - Instead, identify the **core concept tiers** and group parallel elements into matching cloze numbers (c1, c2):
      • **c1 (The Structural / Entity Tier):** Cloze all anatomical structures, organ names, classes, or category labels together.
      • **c2 (The Functional / Coordinate / Detail Tier):** Cloze all corresponding physiological roles, planes of motion, axes, or mechanisms together.
    - Benchmark Examples to ALWAYS emulate:
-     • *Vestibular End Organs:* "The vestibular system detects head acceleration using two sets of end organs: the {{c1::otoliths}} (which sense {{c2::linear}} acceleration) and the {{c1::semicircular canals}} (which sense {{c2::angular}} acceleration)."
-     • *Otolith Organs & Planes:* "Within the otolith organs, the {{c1::saccule}} senses acceleration in {{c2::the vertical plane}}, whereas the {{c1::utricle}} senses acceleration in {{c2::the horizontal plane}} as well as {{c2::head tilt}} relative to gravity."
-     • *Rotational Dimensions & Axes:* "The semicircular canals sense angular head acceleration across three rotational dimensions: {{c1::roll}} (around {{c2::x}}-axis), {{c1::pitch}} (around {{c2::y}}-axis), and {{c1::yaw}} (around {{c2::z}}-axis)."
-     • *Muscle Spindle Fibers & Afferents:* "Within the muscle spindle, {{c1::dynamic bag1}} fibres are innervated primarily by {{c2::Group Ia}} afferents, whereas {{c1::static bag2 and chain}} fibres are innervated primarily by {{c2::Group II}} afferents."
+     • *Vestibular End Organs:* "The vestibular system detects head acceleration using two sets of end organs: the {{{{c1::otoliths}}}} (which sense {{{{c2::linear}}}} acceleration) and the {{{{c1::semicircular canals}}}} (which sense {{{{c2::angular}}}} acceleration)."
+     • *Otolith Organs & Planes:* "Within the otolith organs, the {{{{c1::saccule}}}} senses acceleration in {{{{c2::the vertical plane}}}}, whereas the {{{{c1::utricle}}}} senses acceleration in {{{{c2::the horizontal plane}}}} as well as {{{{c2::head tilt}}}} relative to gravity."
+     • *Rotational Dimensions & Axes:* "The semicircular canals sense angular head acceleration across three rotational dimensions: {{{{c1::roll}}}} (around {{{{c2::x}}}}-axis), {{{{c1::pitch}}}} (around {{{{c2::y}}}}-axis), and {{{{c1::yaw}}}} (around {{{{c2::z}}}}-axis)."
+     • *Muscle Spindle Fibers & Afferents:* "Within the muscle spindle, {{{{c1::dynamic bag1}}}} fibres are innervated primarily by {{{{c2::Group Ia}}}} afferents, whereas {{{{c1::static bag2 and chain}}}} fibres are innervated primarily by {{{{c2::Group II}}}} afferents."
 5. **BIDIRECTIONAL DEFINITION TESTING RULE (TERM ↔ MEANING)**:
    - When a card tests a definition or core scientific concept, NEVER test only in one direction (giving the whole definition and only clozing the term).
    - True exam mastery requires testing in BOTH directions on the note:
@@ -584,15 +667,15 @@ Density Setting: {density_mode}
      • **`c2` (Definition / Functional Role Recall):** Cloze the complete functional description/definition (*[Term] → [What it actually means/does]*).
      • **`c3` (Underlying Driver / Mechanism Tier, if applicable):** Cloze the driving anatomical structure, effector, or mechanism.
    - **Benchmark Examples to ALWAYS emulate**:
-     • *Accommodation:* "{{c2::The dynamic process of altering the shape and curvature of the crystalline lens to focus objects at varying distances onto the retina}} is called {{c1::accommodation}}, which is driven by the contraction and relaxation of the {{c3::ciliary muscles}}."
-     • *Proprioception:* "{{c2::The ability to sense the position, orientation, and movement of the body and limbs in space without visual guidance}} is called {{c1::proprioception}}, mediated primarily by {{c3::muscle spindles and Golgi tendon organs}}."
-     • *Alpha-Gamma Co-activation:* "{{c2::The simultaneous activation of alpha and gamma motoneurons to maintain intrafusal fiber tautness during muscle contraction}} is called {{c1::alpha-gamma co-activation}}, which prevents {{c3::the spindle from falling slack/silent}}."
+     • *Accommodation:* "{{{{c2::The dynamic process of altering the shape and curvature of the crystalline lens to focus objects at varying distances onto the retina}}}} is called {{{{c1::accommodation}}}}, which is driven by the contraction and relaxation of the {{{{c3::ciliary muscles}}}}."
+     • *Proprioception:* "{{{{c2::The ability to sense the position, orientation, and movement of the body and limbs in space without visual guidance}}}} is called {{{{c1::proprioception}}}}, mediated primarily by {{{{c3::muscle spindles and Golgi tendon organs}}}}."
+     • *Alpha-Gamma Co-activation:* "{{{{c2::The simultaneous activation of alpha and gamma motoneurons to maintain intrafusal fiber tautness during muscle contraction}}}} is called {{{{c1::alpha-gamma co-activation}}}}, which prevents {{{{c3::the spindle from falling slack/silent}}}}."
 6. **FORMULATION & DISCIPLINE ADAPTATION**:
-   - For biochemistry/chemistry: use 3-cloze balanced reaction format, ΔG′°, cofactors, active-site residues.
+   - For biochemistry/chemistry: use 3-cloze balanced reaction format, ΔG′°, cofactors, active-site residues, and test reaction types/regulation on dedicated cards.
    - For neurobiology/kinesiology: test afferent/efferent wiring, receptor types, stretch/force mechanics, reflex circuits, vibration paradigms, and somatotopic organization.
    - For social sciences: test definitions, theoretical frameworks, contrasting models.
 7. **SLIDE DIAGRAM EMBEDDING**:
-   - When a slide features an illustrative diagram (available in the extracted figures list), embed it in the 'extra' field using `<img src="FILENAME">` alongside a concise explanation.
+   - When a slide features an illustrative diagram (available in the extracted figures list), embed it in the 'extra' field using `<img src="FILENAME">` alongside at most a brief 1-sentence visual pointer.
 8. **ATOMICITY & NO BINARY CLOZES**:
    - Cloze specific molecular players, anatomical structures, or mechanisms. Never cloze generic binary words like high/low, yes/no, increase/decrease.
 9. **FORMATTING**:
@@ -663,10 +746,11 @@ Density Setting: {density_mode}
                 else f"for Slides {start_slide}–{end_slide}"
             )
 
-            batch_prompt = f"""Referencing the uploaded Lecture Reference Header (.md) for overall lecture context, generate {b_target} distinct, high-yield Anki Cloze flashcards specifically {subsec_context}.
-Ensure thorough coverage of every substantive concept in this batch without duplicating cards from other sub-sections outside Slides {start_slide}–{end_slide}.
-Adhere strictly to the "Support-Only" Extra Field Rule, the Extra Extraction Principle, Coordinated Functional Cloze Grouping (c1/c2), Bidirectional Definition Testing (c1/c2/c3), and Hierarchical Parent/Child rules.
-REMINDER: Never bury testable mechanisms or key terms in the 'extra' field; extract them into dedicated cards!
+            batch_prompt = f"""Referencing the uploaded Lecture Reference Header (.md) for overall lecture context, generate at least {b_target} distinct, high-yield Anki Cloze flashcards specifically {subsec_context}.
+CRITICAL SEQUENCING & COVERAGE RULES FOR THIS BATCH:
+1. **Strict Slide Sequence**: Walk through Slides {start_slide} to {end_slide} in exact numerical order (Slide {start_slide} first, then Slide {min(start_slide + 1, end_slide)}, ..., up to Slide {end_slide}). Set `slide_number` on every note and NEVER jump back and forth between slides.
+2. **100% Testable Coverage (Zero Testable Material in `extra`)**: Every testable concept, mechanism, reaction type, enzyme, cofactor, ΔG′° value, regulator, or definition on Slides {start_slide}–{end_slide} MUST be tested via `{{{{c1::...}}}}`/`{{{{c2::...}}}}`/`{{{{c3::...}}}}` clozes in `text`. If a slide has more testable material than fits on one card, spawn additional cards for that slide!
+3. **Image & Clarification-Only `extra`**: The `extra` field may ONLY contain an embedded slide figure (`<img src="FILENAME">`) and/or a brief 1-sentence non-testable clarification. Before finalizing, audit every card's `extra` field and move any testable facts into active-recall Cloze cards.
 
 Slide Content for this Batch:
 {chr(10).join(batch_text_parts)}
@@ -675,10 +759,10 @@ Slide Content for this Batch:
             response = None
             candidate_models = _ordered_candidate_models(preferred_model, dead_models)
 
-            for m in candidate_models:
+            for m_idx, m in enumerate(candidate_models):
                 model_503 = False
                 for k in active_keys:
-                    client = genai.Client(api_key=k)
+                    client = _create_genai_client(k, timeout_ms=60_000)
                     try:
                         if k not in uploaded_refs and header_md_path and header_md_path.exists():
                             try:
@@ -692,15 +776,14 @@ Slide Content for this Batch:
                         file_ref = uploaded_refs.get(k)
                         contents = ([file_ref] if file_ref else []) + batch_images + [batch_prompt]
 
-                        response = client.models.generate_content(
+                        response = _generate_with_thinking(
+                            client=client,
                             model=m,
                             contents=contents,
-                            config=types.GenerateContentConfig(
-                                system_instruction=system_instruction,
-                                response_mime_type="application/json",
-                                response_schema=BatchCardPayload,
-                                temperature=0.25
-                            )
+                            system_instruction=system_instruction,
+                            response_schema=BatchCardPayload,
+                            temperature=0.25,
+                            thinking_budget=4096
                         )
                         if response and response.text:
                             if "lite" not in m:
@@ -712,8 +795,8 @@ Slide Content for this Batch:
                         if "404" in err_str or "NOT_FOUND" in err_str:
                             dead_models.add(m)
                             break
-                        elif "503" in err_str or "UNAVAILABLE" in err_str:
-                            # 503 is model-wide high demand -> immediately switch to next model tier
+                        elif "503" in err_str or "UNAVAILABLE" in err_str or "timeout" in err_str.lower() or "timed out" in err_str.lower():
+                            # 503 or timeout -> immediately switch to next model tier
                             model_503 = True
                             break
                         elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
@@ -723,12 +806,25 @@ Slide Content for this Batch:
                             break
                 if response and response.text:
                     break
+                if m_idx + 1 < len(candidate_models) and progress_callback:
+                    next_m = candidate_models[m_idx + 1]
+                    progress_callback(
+                        b_idx + 1,
+                        num_batches,
+                        f"Model {m} busy/unavailable, failing over to {next_m} for Slides {start_slide}–{end_slide}..."
+                    )
                 if model_503:
                     continue
 
             if response and response.text:
                 parsed = _safe_parse_json(response.text)
                 batch_notes = parsed.get("notes", [])
+                for n in batch_notes:
+                    s_num = n.get("slide_number")
+                    if not isinstance(s_num, int) or s_num < start_slide or s_num > end_slide:
+                        n["slide_number"] = start_slide
+                # Deterministic stable sort by slide_number within the batch
+                batch_notes.sort(key=lambda n: int(n.get("slide_number") or start_slide))
                 all_notes.extend(batch_notes)
             else:
                 print(f"Warning: Batch {b_idx + 1} generation encountered error: {last_err}")
@@ -736,12 +832,15 @@ Slide Content for this Batch:
         for k, ref in uploaded_refs.items():
             if ref is not None:
                 try:
-                    genai.Client(api_key=k).files.delete(name=ref.name)
+                    _create_genai_client(k, timeout_ms=15_000).files.delete(name=ref.name)
                 except Exception:
                     pass
 
     if not all_notes and last_err:
         raise RuntimeError(f"Card generation failed: {last_err}")
+
+    # Guarantee final deck-wide chronological slide ordering
+    all_notes.sort(key=lambda n: int(n.get("slide_number") or 9999))
 
     # Build final deck payload
     return {
@@ -1436,10 +1535,10 @@ Your task is to create an illustrated, exam-focused Supplementary Study Guide & 
             response = None
             candidate_models = _ordered_candidate_models(preferred_model, dead_models)
 
-            for m in candidate_models:
+            for m_idx, m in enumerate(candidate_models):
                 model_503 = False
                 for k in active_keys:
-                    client = genai.Client(api_key=k)
+                    client = _create_genai_client(k, timeout_ms=60_000)
                     try:
                         # Upload the .md header file once per API key and reuse its HTTPS file_uri reference
                         if k not in uploaded_refs and header_md_path and header_md_path.exists():
@@ -1453,15 +1552,14 @@ Your task is to create an illustrated, exam-focused Supplementary Study Guide & 
                         file_ref = uploaded_refs.get(k)
                         contents = ([file_ref] if file_ref else []) + batch_thumbs + [batch_prompt]
 
-                        response = client.models.generate_content(
+                        response = _generate_with_thinking(
+                            client=client,
                             model=m,
                             contents=contents,
-                            config=types.GenerateContentConfig(
-                                system_instruction=system_instruction,
-                                response_mime_type="application/json",
-                                response_schema=StudyGuidePayload,
-                                temperature=0.3
-                            )
+                            system_instruction=system_instruction,
+                            response_schema=StudyGuidePayload,
+                            temperature=0.3,
+                            thinking_budget=4096
                         )
                         if response and response.text:
                             if "lite" not in m:
@@ -1473,7 +1571,7 @@ Your task is to create an illustrated, exam-focused Supplementary Study Guide & 
                         if "404" in err_str or "NOT_FOUND" in err_str:
                             dead_models.add(m)
                             break
-                        elif "503" in err_str or "UNAVAILABLE" in err_str:
+                        elif "503" in err_str or "UNAVAILABLE" in err_str or "timeout" in err_str.lower() or "timed out" in err_str.lower():
                             model_503 = True
                             break
                         elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
@@ -1482,6 +1580,13 @@ Your task is to create an illustrated, exam-focused Supplementary Study Guide & 
                             break
                 if response and response.text:
                     break
+                if m_idx + 1 < len(candidate_models):
+                    next_m = candidate_models[m_idx + 1]
+                    _notify(
+                        b_idx + 1,
+                        num_batches,
+                        f"Batch {b_idx + 1}/{num_batches}: Model {m} busy, switching to {next_m}..."
+                    )
                 if model_503:
                     continue
 

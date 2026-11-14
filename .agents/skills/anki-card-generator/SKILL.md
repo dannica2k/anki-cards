@@ -36,21 +36,25 @@ Each course has its own pedagogical style, visual/image requirements, and format
 
 ## 3. Universal Spaced-Repetition Quality Rules
 
-1. **Minimum Information Principle (Atomicity):**
+1. **Chronological Slide-by-Slide Sequencing:**
+   - Cards MUST be generated in strict ascending slide sequence (`Slide 1`, then `Slide 2`, then `Slide 3`, etc.). Never jump back and forth between slides.
+   - Within a single slide, place any overarching Parent/Roadmap card first, immediately followed by its Child/Mechanism cards for that same slide.
+2. **100% Testable Material Coverage & Image/Clarification-Only `extra` Field:**
+   - **Coverage Check:** Audit every slide to ensure ALL testable subject matter (definitions, mechanisms, reaction types, enzymes, cofactors, $\Delta G'^\circ$, regulators, anatomical structures, experimental paradigms) is directly tested on active-recall Cloze cards (`{{c1::...}}`, `{{c2::...}}`, `{{c3::...}}` in `text`).
+   - **Strictly Limited `extra`:** The `extra` field should ONLY contain an embedded slide image (`<img src="...">`) and/or a brief 1-sentence non-testable clarification. NEVER put testable subject matter in `extra`—if `extra` contains a testable fact, extract it into a dedicated card on that slide!
+3. **Minimum Information Principle (Atomicity):**
    - Never cloze an entire multi-part sentence or full equation as a single giant blank.
    - Group clozes logically (`c1`, `c2`, `c3`) so each card tests one cohesive concept.
-2. **Coordinated Functional Cloze Grouping (Tiered Category & Detail Rule):**
+4. **Coordinated Functional Cloze Grouping (Tiered Category & Detail Rule):**
    - When testing contrasting pairs, anatomical structures, or categorized lists, NEVER assign sequential arbitrary cloze numbers (e.g. `{{c1::A}} ({{c2::X}}) and {{c3::B}} ({{c4::Y}})`).
    - Group parallel elements into coordinated tiers:
      - **`c1` (The Structural / Entity Tier):** Cloze all anatomical structures, organs, or category labels together.
      - **`c2` (The Functional / Coordinate / Detail Tier):** Cloze all corresponding physiological roles, planes of motion, axes, or mechanisms together.
    - Example: *"The vestibular system detects head acceleration using two sets of end organs: the {{c1::otoliths}} (which sense {{c2::linear}} acceleration) and the {{c1::semicircular canals}} (which sense {{c2::angular}} acceleration)."*
-3. **No Trivial Binary Clozes:**
+5. **No Trivial Binary Clozes:**
    - Never cloze `{{c1::high}}` vs. `low` or `{{c1::yes}}` vs. `no`. Cloze the physiological outcome, mechanism, or molecular player instead.
-4. **Cue Lists Clearly:**
+6. **Cue Lists Clearly:**
    - When testing a list of items, include the count in the prompt (e.g., *"The 3 biological roles of X:"*) so the learner knows what is expected.
-5. **Always Populate the `extra` Field:**
-   - Use the `extra` field on every note to provide brief high-yield context, physiological rationale, or an embedded slide diagram (`<img src="...">`). Never hide substantive testable material solely in `extra`.
 
 ---
 

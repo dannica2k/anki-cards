@@ -22,10 +22,15 @@ Instead, write every biochemical reaction in **equation form** using a single no
 ```text
 [Pathway Name] (Reaction/Step X):<br>{{c1::Substrate}} + {{c3::Cofactor/ATP}} ——[{{c2::Enzyme Name}}]——> {{c1::Product}} + {{c3::Byproduct/ADP/NADH}}
 ```
-**Back Extra (`Extra` field):** Always populate the Extra field with concise high-yield context:
-- Which phase of the pathway it belongs to
-- Reaction type (e.g., *substrate-level phosphorylation*, *isomerization*, *aldol cleavage*, *oxidative decarboxylation*)
-- Thermodynamic/regulatory status (e.g., *Irreversible, $\Delta G'^\circ \ll 0$, committed step, allosterically regulated by...*)
+**Back Extra (`Extra` field — Strictly Images & Brief Clarification Only):**
+- **NEVER place testable facts in `Extra`!** Pathway phase, reaction type (*substrate-level phosphorylation*, *isomerization*, *aldol cleavage*, *oxidative decarboxylation*), thermodynamic status ($\Delta G'^\circ$), committed step status, and allosteric regulators are **testable exam material** and MUST be tested as active-recall Cloze deletions (`{{c1::...}}`, `{{c2::...}}`, `{{c3::...}}`) on their own card (immediately following the reaction card on the same slide).
+- The `Extra` field should ONLY contain the relevant extracted slide figure (`<img src="...">`) and/or a brief 1-sentence visual pointer or non-testable clarification.
+
+---
+
+### 1B. Chronological Slide-by-Slide Sequencing Rule
+- Cards MUST strictly follow the chronological sequence of the lecture slides (`Slide 1`, then `Slide 2`, then `Slide 3`, etc.).
+- Never jump back and forth between slides. Within a single slide, place any overarching Parent/Roadmap card first, immediately followed by its Child/Mechanism cards for that same slide.
 
 ---
 
