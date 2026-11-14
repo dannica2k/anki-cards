@@ -950,7 +950,11 @@ async def drive_fetch(request):
         c_disp, _, s_num = anki_cli.parse_course_and_session(dest.name)
         course_code = c_disp if c_disp != "UNKNOWN" else "MBB 321"
         session_num = s_num or "1"
-        audit = generator.analyze_lecture_pdf(str(dest), BASE_DIR, course_code=course_code, session_num=session_num)
+        loop = asyncio.get_running_loop()
+        audit = await loop.run_in_executor(
+            None,
+            lambda: generator.analyze_lecture_pdf(str(dest), BASE_DIR, course_code=course_code, session_num=session_num)
+        )
         total_pages = audit["total_pages"]
         slides_data = audit["slides_data"]
         num_images = sum(len(s.get("figure_paths", [])) for s in slides_data)
@@ -1011,7 +1015,11 @@ async def direct_upload(request):
         c_disp, _, s_num = anki_cli.parse_course_and_session(filename)
         course_code = c_disp if c_disp != "UNKNOWN" else "MBB 321"
         session_num = s_num or "1"
-        audit = generator.analyze_lecture_pdf(str(dest), BASE_DIR, course_code=course_code, session_num=session_num)
+        loop = asyncio.get_running_loop()
+        audit = await loop.run_in_executor(
+            None,
+            lambda: generator.analyze_lecture_pdf(str(dest), BASE_DIR, course_code=course_code, session_num=session_num)
+        )
         total_pages = audit["total_pages"]
         slides_data = audit["slides_data"]
         num_images = sum(len(s.get("figure_paths", [])) for s in slides_data)
@@ -1214,7 +1222,10 @@ async def run_generation_task(
     try:
         await emit_log("Analyzing lecture structure and auditing diagrams...", percent=10, stage_title="Auditing Lecture Material")
         pdf = Path(pdf_path)
-        audit = generator.analyze_lecture_pdf(str(pdf), BASE_DIR, course_code=course_code, session_num=session_num)
+        audit = await main_loop.run_in_executor(
+            None,
+            lambda: generator.analyze_lecture_pdf(str(pdf), BASE_DIR, course_code=course_code, session_num=session_num)
+        )
         slides_data = audit["slides_data"]
         JOBS[job_id]["slides_data"] = slides_data
         JOBS[job_id]["pdf_path"] = str(pdf)
@@ -1223,16 +1234,16 @@ async def run_generation_task(
         keys_pool = get_api_keys_pool(sid=request_sid)
 
         await emit_log(
-            f"Configured API Key pool ({len(keys_pool)} keys). Generating {target_count} cards ({density_mode})...", 
-            percent=25, 
+            f"Audited {len(slides_data)} slides. Configured API Key pool ({len(keys_pool)} keys). Starting sub-section batch generation ({target_count} target cards, {density_mode})...", 
+            percent=20, 
             stage_title="Generating Flashcards"
         )
 
         # Custom progress callback running inside thread pool
         def progress_cb(current, total, msg):
-            pct = 25 + int((current / max(1, total)) * 45)
+            pct = 20 + int((current / max(1, total)) * 52)
             asyncio.run_coroutine_threadsafe(
-                emit_log(f"Batch {current}/{total}: {msg}", percent=pct, stage_title=f"Generating Cards ({current}/{total})"),
+                emit_log(f"Batch {current}/{total}: {msg}", percent=pct, stage_title=f"Generating Cards (Batch {current}/{total})"),
                 main_loop
             )
 
@@ -1282,8 +1293,16 @@ async def run_generation_task(
 
         guide_id = None
         if gen_study_guide:
-            await emit_log("Generating Illustrated Supplementary Study Guide & PDF...", percent=85, stage_title="Creating Study Guide")
+            await emit_log("Generating Illustrated Supplementary Study Guide & PDF...", percent=84, stage_title="Creating Study Guide")
             try:
+                def sg_progress_cb(current, total, msg=None):
+                    sg_pct = 84 + int((current / max(1, total)) * 10)
+                    sg_msg = msg or f"Generating Study Guide Batch {current}/{total}..."
+                    asyncio.run_coroutine_threadsafe(
+                        emit_log(sg_msg, percent=sg_pct, stage_title=f"Creating Study Guide ({current}/{total})"),
+                        main_loop
+                    )
+
                 guide_data = await main_loop.run_in_executor(
                     None,
                     lambda: generator.generate_study_guide(
@@ -1293,7 +1312,8 @@ async def run_generation_task(
                         custom_focus="",
                         base_dir=BASE_DIR,
                         api_keys_pool=keys_pool,
-                        app_base_url=app_base_url
+                        app_base_url=app_base_url,
+                        progress_callback=sg_progress_cb
                     )
                 )
                 if guide_data:
@@ -1446,6 +1466,10 @@ async def generate_stream(request):
                             f'class="font-bold text-slate-800 text-base">{html.escape(title)}</h4>'
                         )
                     if log_msg:
+                        oob_parts.append(
+                            f'<p id="sse-stage-desc" hx-swap-oob="outerHTML" '
+                            f'class="text-xs text-slate-500">{html.escape(log_msg)}</p>'
+                        )
                         oob_parts.append(
                             f'<div id="sse-logs" hx-swap-oob="beforeend">'
                             f'  <div class="text-slate-300 text-[11px] font-mono leading-tight">↳ {html.escape(log_msg)}</div>'

@@ -12,7 +12,7 @@ import base64
 import mimetypes
 import urllib.parse
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Tuple
 from pydantic import BaseModel, Field
 import pymupdf
 from PIL import Image
@@ -292,6 +292,174 @@ def analyze_lecture_pdf(
     return result
 
 
+DEFAULT_MODELS_TO_TRY = [
+    "gemini-3.8-flash",        # Tier 1: Primary flagship 3.8 Flash (best multimodal & structured reasoning)
+    "gemini-3.7-flash",        # Tier 2: High-accuracy structured multimodal 3.7 Flash
+    "gemini-3.5-flash",        # Tier 3: Proven flagship 3.5 Flash
+    "gemini-3-flash-preview",  # Tier 4: High-capacity Gemini 3 Flash
+    "gemini-2.5-flash",        # Tier 5: Stable 2.5 Flash
+    "gemini-3.5-flash-lite",   # Tier 6: High-quota 3.5 Flash Lite (last-resort fallback)
+    "gemini-3.1-flash-lite",   # Tier 7: Backup high-quota Lite tier
+]
+
+
+def _ordered_candidate_models(preferred_model: Optional[str], dead_models: set) -> List[str]:
+    """
+    Returns candidate models for a batch, placing the proven working full-tier model first
+    and skipping any model endpoints that previously returned 404 / NOT_FOUND.
+    """
+    candidates = []
+    if preferred_model and preferred_model not in dead_models:
+        candidates.append(preferred_model)
+    for m in DEFAULT_MODELS_TO_TRY:
+        if m not in dead_models and m not in candidates:
+            candidates.append(m)
+    return candidates or list(DEFAULT_MODELS_TO_TRY)
+
+
+def _group_slides_by_subsections(
+    slides_data: List[Dict[str, Any]],
+    max_subsections_per_batch: int = 4,
+    max_slides_per_batch: int = 6
+) -> List[Dict[str, Any]]:
+    """
+    Groups slides into logical batches covering up to `max_subsections_per_batch`
+    detected sub-sections (or up to `max_slides_per_batch` slides when no numbered
+    sub-sections are present).
+    """
+    batches = []
+    cur_slides = []
+    cur_sections = []
+
+    for s in slides_data:
+        s_secs = [sec for sec in s.get("sections", []) if sec not in cur_sections]
+        would_exceed_secs = (len(cur_sections) + len(s_secs) > max_subsections_per_batch) and len(cur_slides) > 0
+        would_exceed_slides = len(cur_slides) >= max_slides_per_batch
+
+        if would_exceed_secs or would_exceed_slides:
+            batches.append({
+                "slides": cur_slides,
+                "subsections": cur_sections,
+                "start_slide": cur_slides[0]["page_num"],
+                "end_slide": cur_slides[-1]["page_num"]
+            })
+            cur_slides = []
+            cur_sections = []
+            s_secs = list(s.get("sections", []))
+
+        cur_slides.append(s)
+        for sec in s_secs:
+            if sec not in cur_sections:
+                cur_sections.append(sec)
+
+    if cur_slides:
+        batches.append({
+            "slides": cur_slides,
+            "subsections": cur_sections,
+            "start_slide": cur_slides[0]["page_num"],
+            "end_slide": cur_slides[-1]["page_num"]
+        })
+
+    return batches
+
+
+def _allocate_cards_across_batches(batches: List[Dict[str, Any]], target_count: int) -> List[int]:
+    """
+    Allocates `target_count` proportionally across logical sub-section batches
+    based on each batch's slide count and sub-section density.
+    """
+    n = len(batches)
+    if n == 0:
+        return []
+    if n == 1:
+        return [max(1, target_count)]
+
+    weights = [max(1.0, len(b["slides"]) + 0.5 * len(b.get("subsections", []))) for b in batches]
+    total_w = sum(weights)
+    effective_target = max(target_count, 2 * n)
+
+    allocs = [max(2, int(round(effective_target * (w / total_w)))) for w in weights]
+    diff = effective_target - sum(allocs)
+    # Adjust largest/smallest batches so total matches effective_target
+    order = sorted(range(n), key=lambda i: weights[i], reverse=(diff > 0))
+    idx = 0
+    while diff != 0 and idx < n * 4:
+        b_i = order[idx % n]
+        if diff > 0:
+            allocs[b_i] += 1
+            diff -= 1
+        elif diff < 0 and allocs[b_i] > 2:
+            allocs[b_i] -= 1
+            diff += 1
+        idx += 1
+    return allocs
+
+
+def _build_lecture_header_md(
+    slides_data: List[Dict[str, Any]],
+    course_code: str,
+    session_num: str,
+    course_rules: str,
+    base_dir: Path
+) -> Tuple[Path, Dict[str, str], List[str]]:
+    """
+    Builds and saves `<guide_id>_header.md` containing course rules, the complete
+    lecture sub-section roadmap, figure inventory, and slide text for Gemini File API reference.
+    """
+    guide_id = re.sub(r'[^A-Za-z0-9]', '', course_code).upper() or "COURSE"
+    clean_session = re.sub(r'[^A-Za-z0-9_-]', '', str(session_num)) or "1"
+    guide_id = f"{guide_id}_Session_{clean_session}"
+
+    figure_map: Dict[str, str] = {}
+    all_detected_sections: List[str] = []
+    slide_lines: List[str] = []
+
+    for s in slides_data:
+        pno = s["page_num"]
+        s_secs = s.get("sections", [])
+        for sec in s_secs:
+            if sec not in all_detected_sections:
+                all_detected_sections.append(sec)
+
+        s_figs = []
+        for fig_p in s.get("figure_paths", []):
+            fname = Path(fig_p).name
+            figure_map[fname] = fig_p
+            s_figs.append(fname)
+
+        slide_lines.append(f"\n### Slide {pno}")
+        if s_secs:
+            slide_lines.append(f"- **Detected Sub-Sections:** {', '.join(s_secs)}")
+        if s_figs:
+            slide_lines.append(f"- **Extracted Slide Figures:** {', '.join(s_figs)}")
+        slide_lines.append(s.get("text", ""))
+
+    roadmap_lines = (
+        [f"- {sec}" for sec in all_detected_sections]
+        if all_detected_sections
+        else [f"- Slides 1 to {len(slides_data)}"]
+    )
+
+    header_md_lines = [
+        f"# Lecture Reference Header: {course_code} (Session/Chapter {session_num})",
+        "",
+        "## 1. Course Pedagogical Profile & Rules",
+        course_rules,
+        "",
+        "## 2. Complete Lecture Sub-Section Roadmap",
+        *roadmap_lines,
+        "",
+        "## 3. Slide-by-Slide Lecture Content & Figure Inventory",
+        *slide_lines,
+    ]
+
+    guides_dir = base_dir / "extracted" / "study_guides"
+    guides_dir.mkdir(parents=True, exist_ok=True)
+    header_md_path = guides_dir / f"{guide_id}_header.md"
+    header_md_path.write_text("\n".join(header_md_lines), encoding="utf-8")
+    return header_md_path, figure_map, all_detected_sections
+
+
 def generate_cards_chunked(
     slides_data: List[Dict[str, Any]],
     course_code: str,
@@ -306,11 +474,13 @@ def generate_cards_chunked(
 ) -> Dict[str, Any]:
     """
     Executes chunked multimodal card generation using Gemini Flash:
-    - Processes slides in batches of 4-6 pages with multimodal snapshots + text
+    - Groups slides into logical sub-section batches (up to 4 sub-sections / 6 slides)
+    - Uploads consolidated `<guide_id>_header.md` once via Gemini File API so every batch
+      has full-lecture roadmap context while focusing on its assigned sub-sections
+    - Preserves full 150 DPI native slide snapshots for maximum diagram/subscript legibility
     - Enforces the Mandatory Testing Mandate (no hiding core facts in extra)
     - Enforces Hierarchical Spaced-Repetition (Parent list card + Child deep-dive cards)
-    - Embeds extracted slide figures into the extra field
-    - Automatically fails over across user personal keys, project keys, and model tiers
+    - Automatically fails over across user personal keys, project keys, and sticky model tiers
     - Returns a merged deck payload with packed media
     """
     raw_keys = (api_keys_pool or []) + ([api_key] if api_key else [])
@@ -339,14 +509,23 @@ def generate_cards_chunked(
     unit_type = "Chapter" if "::Chapter::" in course_rules else "Session"
     deck_tag = f"#{course_compact}::{unit_type}::{session_num}"
 
-    total_slides = len(slides_data)
-    batch_size = 4 if total_slides > 12 else 5
-    batches = [slides_data[i:i + batch_size] for i in range(0, total_slides, batch_size)]
-    num_batches = len(batches)
+    # 1. Build consolidated Lecture Reference Header (.md) for full-lecture context
+    header_md_path, _, _ = _build_lecture_header_md(
+        slides_data=slides_data,
+        course_code=course_code,
+        session_num=str(session_num),
+        course_rules=course_rules,
+        base_dir=base_dir
+    )
 
-    # Allocate target cards per batch
-    base_cards_per_batch = max(3, target_count // num_batches)
-    extra_cards = target_count % num_batches
+    # 2. Group slides by logical sub-sections (up to 4 sub-sections or 6 slides per batch)
+    batches = _group_slides_by_subsections(
+        slides_data,
+        max_subsections_per_batch=4,
+        max_slides_per_batch=6
+    )
+    num_batches = max(1, len(batches))
+    batch_allocations = _allocate_cards_across_batches(batches, target_count)
 
     all_notes = []
     used_media_files = set()
@@ -420,108 +599,146 @@ Density Setting: {density_mode}
    - Use clean HTML (<b>, <br>) and Unicode symbols (α, β, γ, Δ, ⇌, →, °, ², ⁺). NEVER use LaTeX backslashes.
 """
 
-    models_to_try = [
-        "gemini-3.5-flash",        # Tier 1: Primary flagship 3.5 Flash
-        "gemini-3-flash-preview",  # Tier 2: Full Gemini 3 Flash
-        "gemini-3.5-flash-lite",   # Tier 3: High-quota, zero-503 3.5 Flash Lite
-        "gemini-3.1-flash-lite"    # Tier 4: Backup high-quota Lite tier
-    ]
+    uploaded_refs: Dict[str, Any] = {}
+    dead_models: set = set()
+    preferred_model: Optional[str] = None
+    last_err = None
 
-    for b_idx, batch in enumerate(batches):
-        b_target = base_cards_per_batch + (1 if b_idx < extra_cards else 0)
-        start_slide = batch[0]["page_num"]
-        end_slide = batch[-1]["page_num"]
+    try:
+        for b_idx, batch in enumerate(batches):
+            b_target = batch_allocations[b_idx]
+            start_slide = batch["start_slide"]
+            end_slide = batch["end_slide"]
+            sub_secs = batch.get("subsections", [])
+            batch_slides = batch["slides"]
 
-        msg = f"Batch {b_idx + 1}/{num_batches}: Generating {b_target} cards for Slides {start_slide}–{end_slide}..."
-        if progress_callback:
-            progress_callback(b_idx + 1, num_batches, msg)
+            if sub_secs:
+                sec_label = ", ".join(sub_secs[:3])
+                msg = f"Generating {b_target} cards for Sub-sections {sec_label} (Slides {start_slide}–{end_slide})..."
+            else:
+                msg = f"Generating {b_target} cards for Slides {start_slide}–{end_slide}..."
 
-        # Prepare multimodal content for batch
-        batch_text_parts = [f"=== SLIDE BATCH: Slides {start_slide} to {end_slide} ==="]
-        batch_images = []
-        batch_available_figures = []
+            if progress_callback:
+                progress_callback(b_idx + 1, num_batches, msg)
 
-        for s in batch:
-            batch_text_parts.append(f"\n--- Slide {s['page_num']} ---")
-            if s.get("sections"):
-                batch_text_parts.append(f"Sections on this slide: {', '.join(s['sections'])}")
-            batch_text_parts.append(s["text"])
+            # Prepare multimodal content for batch (preserving full 150 DPI snapshots)
+            batch_text_parts = [f"=== SLIDE BATCH: Slides {start_slide} to {end_slide} ==="]
+            if sub_secs:
+                batch_text_parts.append(f"Assigned Sub-Sections in this batch: {', '.join(sub_secs)}")
+            batch_images = []
+            batch_available_figures = []
 
-            # Attach slide snapshot image if exists
-            snap = s.get("snapshot_path")
-            if snap and os.path.exists(snap):
-                try:
-                    img = Image.open(snap)
-                    batch_images.append(img)
-                except Exception:
-                    pass
+            for s in batch_slides:
+                batch_text_parts.append(f"\n--- Slide {s['page_num']} ---")
+                if s.get("sections"):
+                    batch_text_parts.append(f"Sections on this slide: {', '.join(s['sections'])}")
+                batch_text_parts.append(s["text"])
 
-            # Track extracted figures
-            for fig_p in s.get("figure_paths", []):
-                fig_name = Path(fig_p).name
-                batch_available_figures.append(fig_name)
-                used_media_files.add(fig_p)
+                # Attach full-resolution 150 DPI slide snapshot image if exists
+                snap = s.get("snapshot_path")
+                if snap and os.path.exists(snap):
+                    try:
+                        img = Image.open(snap)
+                        batch_images.append(img)
+                    except Exception:
+                        pass
 
-        if batch_available_figures:
-            batch_text_parts.append(f"\nAvailable diagram figures to embed in 'extra' (<img src=\"filename\">): {', '.join(batch_available_figures)}")
+                # Track extracted figures
+                for fig_p in s.get("figure_paths", []):
+                    fig_name = Path(fig_p).name
+                    batch_available_figures.append(fig_name)
+                    used_media_files.add(fig_p)
 
-        if custom_guidance:
-            batch_text_parts.append(f"\nUser Custom Focus Guidance:\n{custom_guidance}")
+            if batch_available_figures:
+                batch_text_parts.append(
+                    f"\nAvailable diagram figures to embed in 'extra' (<img src=\"filename\">): {', '.join(batch_available_figures)}"
+                )
 
-        batch_prompt = f"""Generate exactly {b_target} distinct, high-yield Anki Cloze flashcards for Slides {start_slide}–{end_slide}.
-Ensure thorough coverage of every substantive concept in this batch. Adhere strictly to the "Support-Only" Extra Field Rule, the Extra Extraction Principle, and Hierarchical Parent/Child rules.
+            if custom_guidance:
+                batch_text_parts.append(f"\nUser Custom Focus Guidance:\n{custom_guidance}")
+
+            subsec_context = (
+                f"covering Sub-sections ({', '.join(sub_secs)}) on Slides {start_slide}–{end_slide}"
+                if sub_secs
+                else f"for Slides {start_slide}–{end_slide}"
+            )
+
+            batch_prompt = f"""Referencing the uploaded Lecture Reference Header (.md) for overall lecture context, generate {b_target} distinct, high-yield Anki Cloze flashcards specifically {subsec_context}.
+Ensure thorough coverage of every substantive concept in this batch without duplicating cards from other sub-sections outside Slides {start_slide}–{end_slide}.
+Adhere strictly to the "Support-Only" Extra Field Rule, the Extra Extraction Principle, Coordinated Functional Cloze Grouping (c1/c2), Bidirectional Definition Testing (c1/c2/c3), and Hierarchical Parent/Child rules.
 REMINDER: Never bury testable mechanisms or key terms in the 'extra' field; extract them into dedicated cards!
 
-Slide Content:
+Slide Content for this Batch:
 {chr(10).join(batch_text_parts)}
 """
 
-        # Call Gemini with images + prompt across model cascade and active keys
-        contents = batch_images + [batch_prompt]
-        response = None
-        last_err = None
+            response = None
+            candidate_models = _ordered_candidate_models(preferred_model, dead_models)
 
-        for m in models_to_try:
-            model_503 = False
-            for k in active_keys:
-                client = genai.Client(api_key=k)
-                try:
-                    response = client.models.generate_content(
-                        model=m,
-                        contents=contents,
-                        config=types.GenerateContentConfig(
-                            system_instruction=system_instruction,
-                            response_mime_type="application/json",
-                            response_schema=BatchCardPayload,
-                            temperature=0.25
+            for m in candidate_models:
+                model_503 = False
+                for k in active_keys:
+                    client = genai.Client(api_key=k)
+                    try:
+                        if k not in uploaded_refs and header_md_path and header_md_path.exists():
+                            try:
+                                uploaded_refs[k] = client.files.upload(
+                                    file=str(header_md_path),
+                                    config={"mime_type": "text/markdown"}
+                                )
+                            except Exception:
+                                uploaded_refs[k] = None
+
+                        file_ref = uploaded_refs.get(k)
+                        contents = ([file_ref] if file_ref else []) + batch_images + [batch_prompt]
+
+                        response = client.models.generate_content(
+                            model=m,
+                            contents=contents,
+                            config=types.GenerateContentConfig(
+                                system_instruction=system_instruction,
+                                response_mime_type="application/json",
+                                response_schema=BatchCardPayload,
+                                temperature=0.25
+                            )
                         )
-                    )
-                    if response and response.text:
-                        break
-                except Exception as e:
-                    last_err = e
-                    err_str = str(e)
-                    if "503" in err_str or "UNAVAILABLE" in err_str:
-                        # 503 is model-wide high demand -> immediately switch to next model tier
-                        model_503 = True
-                        break
-                    elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                        # Quota reached on this key -> try next key in pool
-                        continue
-                    else:
-                        break
+                        if response and response.text:
+                            if "lite" not in m:
+                                preferred_model = m
+                            break
+                    except Exception as e:
+                        last_err = e
+                        err_str = str(e)
+                        if "404" in err_str or "NOT_FOUND" in err_str:
+                            dead_models.add(m)
+                            break
+                        elif "503" in err_str or "UNAVAILABLE" in err_str:
+                            # 503 is model-wide high demand -> immediately switch to next model tier
+                            model_503 = True
+                            break
+                        elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                            # Quota reached on this key -> try next key in pool
+                            continue
+                        else:
+                            break
+                if response and response.text:
+                    break
+                if model_503:
+                    continue
+
             if response and response.text:
-                break
-            if model_503:
-                continue
-
-
-        if response and response.text:
-            parsed = _safe_parse_json(response.text)
-            batch_notes = parsed.get("notes", [])
-            all_notes.extend(batch_notes)
-        else:
-            print(f"Warning: Batch {b_idx + 1} generation encountered error: {last_err}")
+                parsed = _safe_parse_json(response.text)
+                batch_notes = parsed.get("notes", [])
+                all_notes.extend(batch_notes)
+            else:
+                print(f"Warning: Batch {b_idx + 1} generation encountered error: {last_err}")
+    finally:
+        for k, ref in uploaded_refs.items():
+            if ref is not None:
+                try:
+                    genai.Client(api_key=k).files.delete(name=ref.name)
+                except Exception:
+                    pass
 
     if not all_notes and last_err:
         raise RuntimeError(f"Card generation failed: {last_err}")
@@ -1079,51 +1296,6 @@ def delete_local_study_guide(guide_id: str, base_dir: Path) -> List[str]:
     return deleted
 
 
-def _group_slides_by_subsections(
-    slides_data: List[Dict[str, Any]],
-    max_subsections_per_batch: int = 3,
-    max_slides_per_batch: int = 5
-) -> List[Dict[str, Any]]:
-    """
-    Groups slides into batches covering 3–4 detected sub-sections (or up to 5 slides
-    when no numbered sub-sections are present).
-    """
-    batches = []
-    cur_slides = []
-    cur_sections = []
-
-    for s in slides_data:
-        s_secs = [sec for sec in s.get("sections", []) if sec not in cur_sections]
-        would_exceed_secs = (len(cur_sections) + len(s_secs) > max_subsections_per_batch) and len(cur_slides) > 0
-        would_exceed_slides = len(cur_slides) >= max_slides_per_batch
-
-        if would_exceed_secs or would_exceed_slides:
-            batches.append({
-                "slides": cur_slides,
-                "subsections": cur_sections,
-                "start_slide": cur_slides[0]["page_num"],
-                "end_slide": cur_slides[-1]["page_num"]
-            })
-            cur_slides = []
-            cur_sections = []
-            s_secs = list(s.get("sections", []))
-
-        cur_slides.append(s)
-        for sec in s_secs:
-            if sec not in cur_sections:
-                cur_sections.append(sec)
-
-    if cur_slides:
-        batches.append({
-            "slides": cur_slides,
-            "subsections": cur_sections,
-            "start_slide": cur_slides[0]["page_num"],
-            "end_slide": cur_slides[-1]["page_num"]
-        })
-
-    return batches
-
-
 def generate_study_guide(
     slides_data: List[Dict[str, Any]],
     course_code: str,
@@ -1139,9 +1311,8 @@ def generate_study_guide(
     Generates an illustrated, multimodal Supplementary Study Guide & Concept Explainer:
     1. Builds a consolidated `<guide_id>_header.md` file (course rules, sub-section roadmap,
        figure inventory, and slide text) and uploads it once to the Gemini File API (`file_uri`).
-    2. Processes the lecture in batches of 3–4 detected sub-sections using full Flash models
-       (`gemini-3.5-flash` -> `gemini-3-flash-preview` -> `gemini-3.7-flash`), passing the
-       lightweight `file_uri` reference instead of a massive inline prompt.
+    2. Processes the lecture in batches of 3–4 detected sub-sections using full Flash models,
+       passing the lightweight `file_uri` reference alongside native slide snapshots.
     3. Merges all sections, embeds extracted slide figures as base64 data URIs, and saves JSON/HTML/MD.
     """
     raw_keys = (api_keys_pool or []) + ([api_key] if api_key else [])
@@ -1177,42 +1348,14 @@ def generate_study_guide(
     guide_id = get_study_guide_id(course_code, session_num)
 
     # 1. Build figure inventory and consolidated Header Reference Markdown (.md)
-    figure_map: Dict[str, str] = {}
-    all_detected_sections = []
-    header_md_lines = [
-        f"# Lecture Reference Header: {course_code} (Session/Chapter {session_num})",
-        "",
-        "## 1. Course Pedagogical Profile & Rules",
-        course_rules,
-        "",
-        "## 2. Slide-by-Slide Lecture Content & Figure Inventory"
-    ]
-
-    for s in slides_data:
-        pno = s["page_num"]
-        s_secs = s.get("sections", [])
-        for sec in s_secs:
-            if sec not in all_detected_sections:
-                all_detected_sections.append(sec)
-
-        s_figs = []
-        for fig_p in s.get("figure_paths", []):
-            fname = Path(fig_p).name
-            figure_map[fname] = fig_p
-            s_figs.append(fname)
-
-        header_md_lines.append(f"\n### Slide {pno}")
-        if s_secs:
-            header_md_lines.append(f"- **Detected Sub-Sections:** {', '.join(s_secs)}")
-        if s_figs:
-            header_md_lines.append(f"- **Extracted Slide Figures:** {', '.join(s_figs)}")
-        header_md_lines.append(s.get("text", ""))
-
+    header_md_path, figure_map, _ = _build_lecture_header_md(
+        slides_data=slides_data,
+        course_code=course_code,
+        session_num=str(session_num),
+        course_rules=course_rules,
+        base_dir=base_dir
+    )
     available_figs_str = ", ".join(figure_map.keys()) if figure_map else "None"
-    guides_dir = base_dir / "extracted" / "study_guides"
-    guides_dir.mkdir(parents=True, exist_ok=True)
-    header_md_path = guides_dir / f"{guide_id}_header.md"
-    header_md_path.write_text("\n".join(header_md_lines), encoding="utf-8")
 
     # Group slides into batches of 3–4 detected sub-sections
     batches = _group_slides_by_subsections(slides_data, max_subsections_per_batch=3, max_slides_per_batch=5)
@@ -1229,14 +1372,9 @@ Your task is to create an illustrated, exam-focused Supplementary Study Guide & 
 5. **Formatting**: Use clean GitHub-flavored Markdown and Unicode symbols (ΔG′°, α, β, γ, ⇌, →, ⁺, ²⁺) instead of LaTeX backslashes.
 """
 
-    models_to_try = [
-        "gemini-3.5-flash",        # Tier 1: Primary flagship 3.5 Flash
-        "gemini-3-flash-preview",  # Tier 2: Full Gemini 3 Flash
-        "gemini-3.5-flash-lite",   # Tier 3: High-quota, zero-503 3.5 Flash Lite
-        "gemini-3.1-flash-lite"    # Tier 4: Backup high-quota Lite tier
-    ]
-
     uploaded_refs: Dict[str, Any] = {}
+    dead_models: set = set()
+    preferred_model: Optional[str] = None
     guide_title = f"{course_code} — Session {session_num} Study Guide"
     executive_summary = ""
     all_sections = []
@@ -1255,18 +1393,17 @@ Your task is to create an illustrated, exam-focused Supplementary Study Guide & 
                 msg = f"Batch {b_idx + 1}/{num_batches}: Generating Study Guide for Slides {start_s}–{end_s}..."
             _notify(b_idx + 1, num_batches, msg)
 
-            # Collect up to 2 lightweight thumbnails for this batch's slides
+            # Collect native 150 DPI snapshots for this batch's slides (up to 3 slides)
             batch_thumbs = []
             batch_figs = []
             for s in batch["slides"]:
                 for fp in s.get("figure_paths", []):
                     batch_figs.append(Path(fp).name)
-                if len(batch_thumbs) < 2:
+                if len(batch_thumbs) < 3:
                     snap = s.get("snapshot_path")
                     if snap and os.path.exists(snap):
                         try:
-                            im = Image.open(snap).copy()
-                            im.thumbnail((768, 768))
+                            im = Image.open(snap)
                             batch_thumbs.append(im)
                         except Exception:
                             pass
@@ -1297,19 +1434,24 @@ Your task is to create an illustrated, exam-focused Supplementary Study Guide & 
             )
 
             response = None
-            for m in models_to_try:
+            candidate_models = _ordered_candidate_models(preferred_model, dead_models)
+
+            for m in candidate_models:
                 model_503 = False
                 for k in active_keys:
                     client = genai.Client(api_key=k)
                     try:
                         # Upload the .md header file once per API key and reuse its HTTPS file_uri reference
-                        if k not in uploaded_refs:
-                            uploaded_refs[k] = client.files.upload(
-                                file=str(header_md_path),
-                                config={"mime_type": "text/markdown"}
-                            )
-                        file_ref = uploaded_refs[k]
-                        contents = [file_ref] + batch_thumbs + [batch_prompt]
+                        if k not in uploaded_refs and header_md_path and header_md_path.exists():
+                            try:
+                                uploaded_refs[k] = client.files.upload(
+                                    file=str(header_md_path),
+                                    config={"mime_type": "text/markdown"}
+                                )
+                            except Exception:
+                                uploaded_refs[k] = None
+                        file_ref = uploaded_refs.get(k)
+                        contents = ([file_ref] if file_ref else []) + batch_thumbs + [batch_prompt]
 
                         response = client.models.generate_content(
                             model=m,
@@ -1322,11 +1464,16 @@ Your task is to create an illustrated, exam-focused Supplementary Study Guide & 
                             )
                         )
                         if response and response.text:
+                            if "lite" not in m:
+                                preferred_model = m
                             break
                     except Exception as e:
                         last_err = e
                         err_str = str(e)
-                        if "503" in err_str or "UNAVAILABLE" in err_str:
+                        if "404" in err_str or "NOT_FOUND" in err_str:
+                            dead_models.add(m)
+                            break
+                        elif "503" in err_str or "UNAVAILABLE" in err_str:
                             model_503 = True
                             break
                         elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
@@ -1350,10 +1497,11 @@ Your task is to create an illustrated, exam-focused Supplementary Study Guide & 
     finally:
         # Clean up uploaded remote header files from Gemini File API
         for k, ref in uploaded_refs.items():
-            try:
-                genai.Client(api_key=k).files.delete(name=ref.name)
-            except Exception:
-                pass
+            if ref is not None:
+                try:
+                    genai.Client(api_key=k).files.delete(name=ref.name)
+                except Exception:
+                    pass
 
     if not all_sections:
         raise RuntimeError(f"Study Guide generation failed: {last_err}")
