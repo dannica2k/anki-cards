@@ -137,19 +137,36 @@ def parse_course_and_session(filename: str):
     return course_display, course_compact, session_num
 
 
+def clean_master_apkg_filename(filename: str) -> str:
+    """
+    Strips legacy ' - Updated' / '_Updated' suffixes from an .apkg filename
+    so exports and Google Drive syncs always target and replace the original file.
+    Example: 'MBB 321 - Intermediary Metabolism Flashcards - Updated.apkg'
+          -> 'MBB 321 - Intermediary Metabolism Flashcards.apkg'
+    """
+    return re.sub(r'\s*[-_]+\s*updated(?=\.apkg$)', '', filename, flags=re.IGNORECASE)
+
+
 def find_course_apkg_on_drive(service, course_compact: str, course_display: str, folder_id: str):
     """
     Searches the shared Google Drive folder (and user's Drive) for an existing .apkg matching the course code.
-    Matches either 'MBB321*.apkg' or 'MBB 321*.apkg'.
+    Matches either 'MBB321*.apkg' or 'MBB 321*.apkg', excluding single-session exports.
     """
     query = f"trashed = false and name contains '.apkg' and '{folder_id}' in parents"
     res = service.files().list(q=query, fields="files(id, name, modifiedTime, webViewLink)").execute()
     files = res.get('files', [])
 
     pattern = re.compile(rf'^({re.escape(course_compact)}|{re.escape(course_display)}).*\.apkg$', re.IGNORECASE)
-    matches = [f for f in files if pattern.match(f['name'])]
+    matches = []
+    for f in files:
+        name_upper = f['name'].upper()
+        if " - SESSION " in name_upper or " - CHAPTER " in name_upper or "_SESSION_" in name_upper or "_CHAPTER_" in name_upper:
+            continue
+        if pattern.match(f['name']):
+            matches.append(f)
+
     if matches:
-        # Sort by modifiedTime descending
+        # Sort by modifiedTime descending so the latest cumulative deck is used as baseline
         matches.sort(key=lambda x: x.get('modifiedTime', ''), reverse=True)
         return matches[0]
     return None
@@ -180,8 +197,12 @@ def download_drive_file(service, file_id: str, dest_path: Path) -> Path:
 
 
 def _upsert_drive_file(service, local_path: Path, folder_id: str, mime_type: str = None) -> Dict[str, Any]:
-    """Uploads or updates a file by exact name inside the target Google Drive folder."""
-    fname = local_path.name
+    """
+    Uploads or updates a file by canonical name inside the target Google Drive folder.
+    For .apkg master decks, strips any legacy ' - Updated' suffix so the original file
+    in Google Drive is replaced in place (while Google Drive retains version history).
+    """
+    fname = clean_master_apkg_filename(local_path.name) if local_path.suffix.lower() == ".apkg" else local_path.name
     escaped_name = fname.replace("'", "\\'")
     query = f"trashed = false and name = '{escaped_name}' and '{folder_id}' in parents"
     res = service.files().list(q=query, fields="files(id, name, webViewLink)").execute()
@@ -195,13 +216,30 @@ def _upsert_drive_file(service, local_path: Path, folder_id: str, mime_type: str
             media_body=media,
             fields="id, name, webViewLink"
         ).execute()
-    else:
-        body = {"name": fname, "parents": [folder_id]}
-        return service.files().create(
-            body=body,
-            media_body=media,
-            fields="id, name, webViewLink"
-        ).execute()
+
+    if local_path.suffix.lower() == ".apkg":
+        stem = Path(fname).stem.replace("'", "\\'")
+        legacy_query = (
+            f"trashed = false and (name = '{stem} - Updated.apkg' or name = '{stem} - updated.apkg') "
+            f"and '{folder_id}' in parents"
+        )
+        legacy_res = service.files().list(q=legacy_query, fields="files(id, name, webViewLink)").execute()
+        legacy_files = legacy_res.get("files", [])
+        if legacy_files:
+            fid = legacy_files[0]["id"]
+            return service.files().update(
+                fileId=fid,
+                body={"name": fname},
+                media_body=media,
+                fields="id, name, webViewLink"
+            ).execute()
+
+    body = {"name": fname, "parents": [folder_id]}
+    return service.files().create(
+        body=body,
+        media_body=media,
+        fields="id, name, webViewLink"
+    ).execute()
 
 
 def sync_study_guide_to_drive(service, json_path: Path, html_path: Path, folder_id: str = DEFAULT_SHARED_FOLDER_ID, pdf_path: Optional[Path] = None) -> Dict[str, Any]:
@@ -484,12 +522,13 @@ def get_deck_info_from_apkg(apkg_path: Path) -> Optional[Dict[str, Any]]:
 
             conn.close()
 
+            clean_fname = clean_master_apkg_filename(Path(apkg_path).name)
             return {
-                "deck_name": deck_name or Path(apkg_path).stem,
+                "deck_name": deck_name or Path(clean_fname).stem,
                 "deck_id": deck_id,
                 "notetype_id": mid,
                 "total_notes": tot_notes,
-                "file_name": Path(apkg_path).name,
+                "file_name": clean_fname,
                 "path": str(apkg_path)
             }
     except Exception as e:
@@ -503,7 +542,7 @@ def find_baseline_apkg(course_code: str, base_dir: Path, service=None, folder_id
     1. Checks local base_dir and extracted/ directory.
     2. Checks course reference markdown for Target Deck File Pattern or Drive ID.
     3. Searches the Google Drive folder if service is provided.
-    Returns the local Path to the baseline .apkg.
+    Returns the local Path to the baseline .apkg (normalized without ' - Updated' suffix).
     """
     course_compact = course_code.replace(" ", "").upper()
     course_display = course_code.upper()
@@ -516,8 +555,8 @@ def find_baseline_apkg(course_code: str, base_dir: Path, service=None, folder_id
         for apkg in search_dir.glob("*.apkg"):
             stem = apkg.stem.upper()
             if course_compact in stem or course_display in stem:
-                # Exclude single session exports like "BPK207 - Session 3a.apkg"
-                if " - SESSION " in stem or " - CHAPTER " in stem:
+                # Exclude single session exports like "BPK207 - Session 3a.apkg" or "MBB321_Session_1_Cloze.apkg"
+                if " - SESSION " in stem or " - CHAPTER " in stem or "_SESSION_" in stem or "_CHAPTER_" in stem:
                     continue
                 candidates.append(apkg)
 
@@ -539,7 +578,9 @@ def find_baseline_apkg(course_code: str, base_dir: Path, service=None, folder_id
             target_drive_id = id_match.group(1)
         pat_match = re.search(r'Target Deck File Pattern:\s*`?([^`\n]+)`?', text)
         if pat_match:
-            target_pattern = pat_match.group(1).split("(")[0].strip()
+            raw_pat = pat_match.group(1).split("(")[0].strip()
+            if "*" not in raw_pat and raw_pat.lower().endswith(".apkg"):
+                target_pattern = clean_master_apkg_filename(raw_pat)
 
     # If Drive ID found in reference and service available, download it
     if target_drive_id and service:
@@ -556,7 +597,8 @@ def find_baseline_apkg(course_code: str, base_dir: Path, service=None, folder_id
         try:
             remote = find_course_apkg_on_drive(service, course_compact, course_display, folder_id)
             if remote:
-                dest = work_dir / remote["name"]
+                clean_remote_name = clean_master_apkg_filename(remote["name"])
+                dest = work_dir / clean_remote_name
                 if not dest.exists():
                     download_drive_file(service, remote["id"], dest)
                 return dest
@@ -762,15 +804,20 @@ def cmd_sync(args):
     )
 
     if remote_deck:
-        apkg_path = work_dir / remote_deck['name']
-        print(f"Found existing Drive deck: '{remote_deck['name']}' (ID: {remote_deck['id']}). Downloading latest copy...")
+        clean_name = clean_master_apkg_filename(remote_deck['name'])
+        apkg_path = work_dir / clean_name
+        print(f"Found existing Drive deck: '{remote_deck['name']}' (ID: {remote_deck['id']}). Downloading latest copy as '{clean_name}'...")
         download_drive_file(service, remote_deck['id'], apkg_path)
         tot_notes, tot_cards = update_existing_apkg(
             apkg_path, notes_list, tag_str, replace_session_tag=not args.append, media_files=media_files
         )
     elif local_matches:
-        apkg_path = local_matches[0]
-        print(f"Found local deck: '{apkg_path.name}'. Updating...")
+        src_path = local_matches[0]
+        clean_name = clean_master_apkg_filename(src_path.name)
+        apkg_path = work_dir / clean_name
+        if src_path.resolve() != apkg_path.resolve():
+            shutil.copyfile(str(src_path), str(apkg_path))
+        print(f"Found local deck: '{src_path.name}'. Updating '{apkg_path.name}'...")
         tot_notes, tot_cards = update_existing_apkg(
             apkg_path, notes_list, tag_str, replace_session_tag=not args.append, media_files=media_files
         )
@@ -783,28 +830,10 @@ def cmd_sync(args):
 
     print(f"Deck updated locally: {apkg_path.name} (Total Notes: {tot_notes}, Total Cards: {tot_cards})")
 
-    # Sync to Google Drive shared folder
-    media = MediaFileUpload(str(apkg_path), resumable=True)
-    if remote_deck:
-        print(f"Syncing updated '{apkg_path.name}' to Google Drive (File ID: {remote_deck['id']})...")
-        updated = service.files().update(
-            fileId=remote_deck['id'],
-            media_body=media,
-            fields='id, name, webViewLink, modifiedTime'
-        ).execute()
-        print(f"Sync complete! Link: {updated.get('webViewLink')}")
-    else:
-        print(f"Uploading new '{apkg_path.name}' to shared Google Drive folder ({args.folder_id})...")
-        file_meta = {
-            'name': apkg_path.name,
-            'parents': [args.folder_id]
-        }
-        created = service.files().create(
-            body=file_meta,
-            media_body=media,
-            fields='id, name, webViewLink'
-        ).execute()
-        print(f"Upload complete! Link: {created.get('webViewLink')}")
+    # Sync to Google Drive shared folder (replacing the canonical original file in place)
+    print(f"Syncing '{apkg_path.name}' to Google Drive folder ({args.folder_id})...")
+    synced = _upsert_drive_file(service, apkg_path, folder_id=args.folder_id)
+    print(f"Sync complete! File: '{synced.get('name')}' (ID: {synced.get('id')}) Link: {synced.get('webViewLink')}")
 
 
 def main():

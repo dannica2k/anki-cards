@@ -1151,7 +1151,7 @@ def compile_course_decks(
 
     if deck_info:
         canonical_deck_name = deck_info["deck_name"]
-        canonical_file_name = deck_info["file_name"]
+        canonical_file_name = anki_cli.clean_master_apkg_filename(deck_info["file_name"])
     else:
         canonical_deck_name = f"{course_code} - Flashcards"
         canonical_file_name = f"{clean_course} - Flashcards.apkg"
@@ -1160,8 +1160,15 @@ def compile_course_decks(
 
     # 3. Compile or update master package
     if baseline_apkg and os.path.exists(str(baseline_apkg)):
-        if Path(baseline_apkg).resolve() != master_path.resolve():
+        src_resolved = Path(baseline_apkg).resolve()
+        if src_resolved != master_path.resolve():
             shutil.copyfile(str(baseline_apkg), str(master_path))
+            # If the baseline inside EXTRACTED_DIR had a legacy '- Updated' suffix, remove the duplicate
+            if src_resolved.parent == EXTRACTED_DIR.resolve():
+                try:
+                    src_resolved.unlink()
+                except Exception:
+                    pass
         tot_notes, tot_cards = anki_cli.update_existing_apkg(
             master_path,
             notes_with_links,
