@@ -155,7 +155,7 @@ def extract_pdf_assets(pdf_path: str, output_dir: Path) -> Dict[str, Any]:
         re.IGNORECASE
     )
     section_line_pattern = re.compile(
-        r'^\s*(?:(?:Section|Topic|Part|Module)\s+(\d{1,2}[a-zA-Z]?(?:\.\d+)*)|(\d{1,2}[a-zA-Z]?(?:\.\d+)+))\s*[:.\-–—)]?\s+([A-Z][A-Za-z0-9\s,\-–—/\'’]{2,55})\s*$'
+        r'^\s*(?:(?:Section|Topic|Part|Module)\s+(\d{1,2}[a-zA-Z]?(?:\.\d+)*)|(\d{1,2}[a-zA-Z]?(?:\.\d+)+))\s*[:.\-–—)]?\s+([A-Z][A-Za-z0-9\s,:\-–—/&+()\'’]{2,65})\s*$'
     )
     all_sections_detected = []
 
@@ -215,6 +215,8 @@ def extract_pdf_assets(pdf_path: str, output_dir: Path) -> Dict[str, Any]:
             "snapshot_path": str(slide_img_path),
             "figure_paths": embedded_figures
         })
+
+    doc.close()
 
     return {
         "layout": layout,
@@ -646,38 +648,35 @@ Density Setting: {density_mode}
          Extra: ""
        • Card 3 (Slide 4 - Hair Cell Transduction): "In vestibular hair cells, bundle deflection {{{{c1::towards}}}} the kinocilium opens mechanically gated channels causing {{{{c2::K⁺ influx and depolarization}}}}, whereas deflection {{{{c1::away from}}}} the kinocilium causes {{{{c2::hyperpolarization}}}}."
          Extra: ""
-3. **HIERARCHICAL SPACED REPETITION (PARENT / CHILD CARDS)**:
-   - For multi-part topics or numbered lists (e.g. 3 techniques to study proprioception):
-     a) Create an overarching **Parent / Roadmap Card** testing the overall category names and count.
-     b) Immediately follow it (on the same slide) with dedicated **Child / Deep-Dive Cards** drilling into the exact mechanisms, experimental observations, and physiological distinctions of EACH item.
-4. **COORDINATED FUNCTIONAL CLOZE GROUPING (TIERED CATEGORY & DETAIL RULE)**:
-   - When testing contrasting pairs, anatomical structures, or categorized lists, NEVER assign sequential arbitrary cloze numbers (e.g., {{{{c1::A}}}} ({{{{c2::X}}}}) and {{{{c3::B}}}} ({{{{c4::Y}}}})).
-   - Instead, identify the **core concept tiers** and group parallel elements into matching cloze numbers (c1, c2):
-     • **c1 (The Structural / Entity Tier):** Cloze all anatomical structures, organ names, classes, or category labels together.
-     • **c2 (The Functional / Coordinate / Detail Tier):** Cloze all corresponding physiological roles, planes of motion, axes, or mechanisms together.
+3. **UNBUNDLE MULTI-STEP ENZYMATIC CASCADES & HIERARCHICAL PARENT/CHILD CARDS**:
+   - **Never cram a multi-step enzymatic cascade (e.g., PDH E1 → E2 → E3) into a single run-on sentence with 6–8 clozes!**
+   - Instead:
+     a) Create a **Parent / Subunit Card** pairing subunit abbreviations (`c1`) with full enzyme names (`c2`):
+        `"The Pyruvate Dehydrogenase (PDH) complex is composed of three catalytic subunits: {{{{c1::E1}}}} ({{{{c2::pyruvate dehydrogenase}}}}), {{{{c1::E2}}}} ({{{{c2::dihydrolipoyl transacetylase}}}}), and {{{{c1::E3}}}} ({{{{c2::dihydrolipoyl dehydrogenase}}}})."`
+     b) Immediately follow it (in sequential order) with **1 concise card per partial reaction step**, each beginning with a clear **Pathway/Subunit Context Prefix** (e.g., `PDH (E1 Decarboxylation):`, `PDH (E1 → E2 Transfer):`, `PDH (E2 Transesterification):`, `PDH (E3 Reoxidation):`) and embedding the corresponding slide diagram in `extra`.
+4. **COORDINATED 2-TIER FUNCTIONAL CLOZE GROUPING & ATOMIC CLOZE HYGIENE**:
+   - **Prefer 2 Coordinated Cloze Tiers (`c1` and `c2`)** on conceptual and mechanistic cards (reserving `c3` for 3-part balanced reaction equations when needed):
+     • **`c1` (Structural / Entity / Subunit / Cofactor Tier):** Cloze anatomical structures, enzyme subunits, cofactors, orbitals, or bond types.
+     • **`c2` (Functional / Outcome / Intermediate / Mechanism Tier):** Cloze corresponding physiological roles, reaction outcomes, intermediates, or qualitative thermodynamic properties.
+   - **Max 3–4 Cloze Boxes per Card**: Never place 5–9 cloze boxes in a single sentence, and never collapse 4+ blanks into `c1` ("Swiss cheese sentence"). If a slide has 6–8 testable facts, split them into 2 concise sequential cards on that slide.
+   - **No Adjacent Cognate Giveaways**: Never place root-related words in adjacent clozes (e.g., never write `the {{{{c1::carboxylate}}}} group {{{{c2::decarboxylates}}}}` where the visible word gives away the blank).
    - Benchmark Examples to ALWAYS emulate:
-     • *Vestibular End Organs:* "The vestibular system detects head acceleration using two sets of end organs: the {{{{c1::otoliths}}}} (which sense {{{{c2::linear}}}} acceleration) and the {{{{c1::semicircular canals}}}} (which sense {{{{c2::angular}}}} acceleration)."
-     • *Otolith Organs & Planes:* "Within the otolith organs, the {{{{c1::saccule}}}} senses acceleration in {{{{c2::the vertical plane}}}}, whereas the {{{{c1::utricle}}}} senses acceleration in {{{{c2::the horizontal plane}}}} as well as {{{{c2::head tilt}}}} relative to gravity."
-     • *Rotational Dimensions & Axes:* "The semicircular canals sense angular head acceleration across three rotational dimensions: {{{{c1::roll}}}} (around {{{{c2::x}}}}-axis), {{{{c1::pitch}}}} (around {{{{c2::y}}}}-axis), and {{{{c1::yaw}}}} (around {{{{c2::z}}}}-axis)."
-     • *Muscle Spindle Fibers & Afferents:* "Within the muscle spindle, {{{{c1::dynamic bag1}}}} fibres are innervated primarily by {{{{c2::Group Ia}}}} afferents, whereas {{{{c1::static bag2 and chain}}}} fibres are innervated primarily by {{{{c2::Group II}}}} afferents."
-5. **BIDIRECTIONAL DEFINITION TESTING RULE (TERM ↔ MEANING)**:
-   - When a card tests a definition or core scientific concept, NEVER test only in one direction (giving the whole definition and only clozing the term).
-   - True exam mastery requires testing in BOTH directions on the note:
-     • **`c1` (Term Recall):** Cloze the formal term/concept name (*[Definition] → [Term]*).
-     • **`c2` (Definition / Functional Role Recall):** Cloze the complete functional description/definition (*[Term] → [What it actually means/does]*).
-     • **`c3` (Underlying Driver / Mechanism Tier, if applicable):** Cloze the driving anatomical structure, effector, or mechanism.
-   - **Benchmark Examples to ALWAYS emulate**:
-     • *Accommodation:* "{{{{c2::The dynamic process of altering the shape and curvature of the crystalline lens to focus objects at varying distances onto the retina}}}} is called {{{{c1::accommodation}}}}, which is driven by the contraction and relaxation of the {{{{c3::ciliary muscles}}}}."
-     • *Proprioception:* "{{{{c2::The ability to sense the position, orientation, and movement of the body and limbs in space without visual guidance}}}} is called {{{{c1::proprioception}}}}, mediated primarily by {{{{c3::muscle spindles and Golgi tendon organs}}}}."
-     • *Alpha-Gamma Co-activation:* "{{{{c2::The simultaneous activation of alpha and gamma motoneurons to maintain intrafusal fiber tautness during muscle contraction}}}} is called {{{{c1::alpha-gamma co-activation}}}}, which prevents {{{{c3::the spindle from falling slack/silent}}}}."
-6. **FORMULATION & DISCIPLINE ADAPTATION**:
-   - For biochemistry/chemistry: use 3-cloze balanced reaction format, ΔG′°, cofactors, active-site residues, and test reaction types/regulation on dedicated cards.
-   - For neurobiology/kinesiology: test afferent/efferent wiring, receptor types, stretch/force mechanics, reflex circuits, vibration paradigms, and somatotopic organization.
-   - For social sciences: test definitions, theoretical frameworks, contrasting models.
+     • *CoA Structure/Function:* `"{{{{c2::Coenzyme A (CoA)}}}} is an activated {{{{c1::acyl-group}}}} carrier with a high transfer potential that attaches acyl groups to its terminal {{{{c1::thiol (-SH)}}}} group."`
+     • *Vestibular End Organs:* `"The vestibular system detects head acceleration using two sets of end organs: the {{{{c1::otoliths}}}} (which sense {{{{c2::linear}}}} acceleration) and the {{{{c1::semicircular canals}}}} (which sense {{{{c2::angular}}}} acceleration)."`
+     • *Muscle Spindle Fibers & Afferents:* `"Within the muscle spindle, {{{{c1::dynamic bag1}}}} fibres are innervated primarily by {{{{c2::Group Ia}}}} afferents, whereas {{{{c1::static bag2 and chain}}}} fibres are innervated primarily by {{{{c2::Group II}}}} afferents."`
+5. **NATURAL SUBJECT-FIRST BIDIRECTIONAL DEFINITIONS (NO 20-WORD "JEOPARDY" CLAUSES)**:
+   - Write definitions in natural **Subject → Predicate** order. NEVER start a card by clozing a 15–25 word definition clause (`"{{{{c2::Long 20-word definition...}}}} is called {{{{c1::Term}}}}"`).
+   - Instead, put the term in `c1` (or `c2`) at the subject position and cloze the short 1–4 word defining functional phrases in `c2` (or `c1`) so both directions are tested with crisp, atomic blanks:
+     • *Ping-Pong Mechanism:* `"The PDH complex operates via a {{{{c1::Ping-Pong}}}} kinetic mechanism (classified as a {{{{c2::tri-tri}}}} reaction), in which {{{{c2::products are released sequentially between substrate additions}}}} via covalent enzyme intermediates."`
+     • *Accommodation:* `"{{{{c1::Accommodation}}}} is the dynamic process of {{{{c2::altering the shape and curvature of the crystalline lens}}}} to focus objects at varying distances onto the retina, driven by the {{{{c2::ciliary muscles}}}}."`
+6. **QUALITATIVE THERMODYNAMICS, ZERO HISTORICAL TRIVIA, & TYPO FACT-CHECKING**:
+   - **Qualitative Thermodynamics Over Raw Decimals**: Cloze whether a reaction is `{{{{c1::exergonic}}}}`/`endergonic` and `{{{{c1::irreversible}}}}`/`reversible` along with the chemical/orbital rationale (`{{{{c1::3p}}}}` vs `{{{{c1::2p}}}}` orbital overlap, `{{{{c1::C–S}}}}` vs `{{{{c1::C–O}}}}` bond stability, `{{{{c2::resonance stabilization}}}}`), keeping exact ΔG′° decimal numbers (`–29.6 kJ/mol`, `–33.5 kJ/mol`) un-clozed in parentheses for context unless the slide specifically contrasts energy-yield tiers.
+   - **Zero Historical Trivia & Zero Recap Duplicates**: Never generate cards testing scientist names, Nobel Prizes, or discovery years (e.g., Fritz Lipmann / Hans Krebs 1953). Never generate duplicate summary cards from a lecture's final recap slide when those facts were already tested on earlier slides.
+   - **Biochemical Fact-Checking of Slide Typos**: If a slide has an obvious scientific typo (e.g., stating NAD⁺ is derived from Vitamin B12 instead of **Vitamin B3 / niacin**), always test the **biochemically accurate fact** (`{{{{c2::Vitamin B3 (niacin)}}}}`) on the card front and mention the slide typo in `extra`.
 7. **SLIDE DIAGRAM EMBEDDING**:
-   - When a slide features an illustrative diagram (available in the extracted figures list), embed it in the 'extra' field using `<img src="FILENAME">` alongside at most a brief 1-sentence visual pointer.
+   - When a slide features an illustrative diagram (available in the extracted figures list), embed it in the 'extra' field using `<img src="FILENAME">` alongside at most a brief 1-sentence visual pointer (including on every unbundled step card of a multi-step mechanism!).
 8. **ATOMICITY & NO BINARY CLOZES**:
-   - Cloze specific molecular players, anatomical structures, or mechanisms. Never cloze generic binary words like high/low, yes/no, increase/decrease.
+   - Cloze specific molecular players, anatomical structures, or mechanisms. Never cloze generic binary words like high/low, yes/no, increase/decrease, or arbitrary step index numbers (`Step {{{{c1::0}}}}`).
 9. **FORMATTING**:
    - Use clean HTML (<b>, <br>) and Unicode symbols (α, β, γ, Δ, ⇌, →, °, ², ⁺). NEVER use LaTeX backslashes.
 """
@@ -721,8 +720,9 @@ Density Setting: {density_mode}
                 snap = s.get("snapshot_path")
                 if snap and os.path.exists(snap):
                     try:
-                        img = Image.open(snap)
-                        batch_images.append(img)
+                        with Image.open(snap) as im:
+                            im.load()
+                            batch_images.append(im.copy())
                     except Exception:
                         pass
 
@@ -1502,8 +1502,9 @@ Your task is to create an illustrated, exam-focused Supplementary Study Guide & 
                     snap = s.get("snapshot_path")
                     if snap and os.path.exists(snap):
                         try:
-                            im = Image.open(snap)
-                            batch_thumbs.append(im)
+                            with Image.open(snap) as im:
+                                im.load()
+                                batch_thumbs.append(im.copy())
                         except Exception:
                             pass
 
