@@ -4,11 +4,13 @@ Guarantees exam-grade coverage, format-aware density calibration, and direct tes
 """
 
 import os
+import io
 import re
 import json
 import time
 import html
 import base64
+import hashlib
 import mimetypes
 import urllib.parse
 from pathlib import Path
@@ -135,17 +137,120 @@ def detect_pdf_layout(doc: pymupdf.Document) -> Dict[str, Any]:
     }
 
 
-def extract_pdf_assets(pdf_path: str, output_dir: Path) -> Dict[str, Any]:
+def _get_image_pixels(im: Image.Image) -> list:
+    """Returns flat pixel list across Pillow versions without deprecation warnings."""
+    if hasattr(im, "get_flattened_data"):
+        return list(im.get_flattened_data())
+    return list(im.getdata())
+
+
+def _is_valid_educational_figure(
+    img_bytes: bytes,
+    pno: int = 1,
+    total_pages: int = 15,
+    page_occurrence_count: int = 1
+) -> bool:
     """
-    Renders slide snapshots (DPI 150), extracts embedded figures,
-    and captures structured text blocks with section headings.
+    Filters out non-educational / decorative slide images before card generation:
+    1. Rejects cover/title slide (Slide 1) decorative banners in multi-slide decks.
+    2. Rejects template/watermark graphics repeated across multiple slides in the same deck.
+    3. Rejects tiny icons, badges, or thin divider strips.
+    4. Rejects camera photographs (e.g., campus/SFU building photos, classroom photos, portraits)
+       which lack the white or transparent/uniform background of scientific diagrams.
+    5. Rejects dark-background stock illustrations with high photographic color entropy.
+    """
+    if not img_bytes or len(img_bytes) <= 3000:
+        return False
+    if pno == 0 and total_pages > 2:
+        return False
+    if page_occurrence_count > 1:
+        return False
+
+    try:
+        with Image.open(io.BytesIO(img_bytes)) as im:
+            w, h = im.size
+            if w < 100 or h < 45:
+                return False
+            aspect = w / max(h, 1)
+            if aspect > 12.0 or aspect < 0.12:
+                return False
+
+            has_transparency = False
+            if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+                rgba = im.convert("RGBA").resize((100, 100))
+                alpha_vals = [px[3] for px in _get_image_pixels(rgba)]
+                transparent_frac = sum(1 for a in alpha_vals if a < 30) / max(len(alpha_vals), 1)
+                if transparent_frac >= 0.15:
+                    has_transparency = True
+
+            rgb = im.convert("RGB").resize((100, 100))
+            pixels = _get_image_pixels(rgb)
+            n_px = max(len(pixels), 1)
+            near_white = sum(1 for r, g, b in pixels if r > 235 and g > 235 and b > 235) / n_px
+            near_black = sum(1 for r, g, b in pixels if r < 20 and g < 20 and b < 20) / n_px
+            buckets = len(set((r >> 4, g >> 4, b >> 4) for r, g, b in pixels))
+
+            # Camera photographs (campus buildings, classroom scenes, scientist portraits)
+            if not has_transparency and (near_white + near_black) < 0.12:
+                return False
+
+            # Dark-background stock art / decorative 3D splash graphics
+            if not has_transparency and near_white < 0.15 and buckets > 450:
+                return False
+
+            return True
+    except Exception:
+        return False
+
+
+def _sanitize_note_extra_images(notes: List[Dict[str, Any]], valid_filenames: set) -> List[Dict[str, Any]]:
+    """
+    Strips any `<img src="...">` tag in `extra` whose filename is not in the whitelisted
+    educational figures extracted for the current lecture/batch.
+    """
+    img_tag_re = re.compile(r'<img\b[^>]*\bsrc=["\']([^"\']+)["\'][^>]*>', re.IGNORECASE)
+    for n in notes:
+        extra = n.get("extra", "")
+        if not extra or "<img" not in extra.lower():
+            continue
+
+        def _check_img(match: re.Match) -> str:
+            src = match.group(1).strip()
+            if src in valid_filenames:
+                return match.group(0)
+            return ""
+
+        cleaned = img_tag_re.sub(_check_img, extra)
+        cleaned = re.sub(r'^(?:\s*<br\s*/?>\s*)+', '', cleaned, flags=re.IGNORECASE).strip()
+        n["extra"] = cleaned
+    return notes
+
+
+def extract_pdf_assets(pdf_path: str, output_dir: Path, file_prefix: str = "") -> Dict[str, Any]:
+    """
+    Renders slide snapshots (DPI 150), extracts embedded educational figures with
+    globally unique session+hash-scoped filenames (filtering out decorative photos,
+    campus pictures, portraits, and repeated slide-template graphics), and captures
+    structured text blocks with section headings.
     """
     images_dir = output_dir / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
+    clean_prefix = re.sub(r'[^A-Za-z0-9_]', '', file_prefix or output_dir.name) or "deck"
+
     doc = pymupdf.open(pdf_path)
     total_pages = len(doc)
     layout = detect_pdf_layout(doc)
+
+    # First pass: count how many distinct pages each image xref appears on to detect template/watermark graphics
+    xref_page_counts: Dict[int, int] = {}
+    for pno in range(total_pages):
+        seen_on_page = set()
+        for img_info in doc[pno].get_images(full=True):
+            xref = img_info[0]
+            if xref not in seen_on_page:
+                seen_on_page.add(xref)
+                xref_page_counts[xref] = xref_page_counts.get(xref, 0) + 1
 
     slides_data = []
     unit_blacklist = re.compile(
@@ -191,20 +296,27 @@ def extract_pdf_assets(pdf_path: str, output_dir: Path) -> Dict[str, Any]:
         pix = page.get_pixmap(dpi=150)
         pix.save(str(slide_img_path))
 
-        # Extract embedded figures
+        # Extract embedded educational figures (excluding decorative photos & template art)
         embedded_figures = []
         for img_idx, img_info in enumerate(page.get_images(full=True)):
             xref = img_info[0]
             try:
                 base_img = doc.extract_image(xref)
+                img_bytes = base_img["image"]
                 ext = base_img["ext"]
-                fig_name = f"slide_{pno+1:02d}_fig_{img_idx+1}.{ext}"
+                if not _is_valid_educational_figure(
+                    img_bytes,
+                    pno=pno,
+                    total_pages=total_pages,
+                    page_occurrence_count=xref_page_counts.get(xref, 1)
+                ):
+                    continue
+                img_hash = hashlib.sha1(img_bytes).hexdigest()[:6]
+                fig_name = f"{clean_prefix}_slide_{pno+1:02d}_fig_{img_idx+1}_{img_hash}.{ext}"
                 fig_path = images_dir / fig_name
                 with open(fig_path, "wb") as f_out:
-                    f_out.write(base_img["image"])
-                # Only keep figures of reasonable size (ignore 1x1 tracking pixels/icons)
-                if len(base_img["image"]) > 3000:
-                    embedded_figures.append(str(fig_path))
+                    f_out.write(img_bytes)
+                embedded_figures.append(str(fig_path))
             except Exception:
                 pass
 
@@ -241,7 +353,9 @@ def analyze_lecture_pdf(
     - Identifies prof hints, exclusions ("Don't need to know"), and critical diagrams
     - Returns actionable observations and specific quality warnings
     """
-    extract_dir = base_dir / "extracted" / f"{course_code.replace(' ', '')}_Session_{session_num}"
+    course_compact = re.sub(r'[^A-Za-z0-9]', '', course_code) or "COURSE"
+    clean_session = re.sub(r'[^A-Za-z0-9_-]', '', str(session_num)) or "1"
+    extract_dir = base_dir / "extracted" / f"{course_compact}_Session_{clean_session}"
     extract_dir.mkdir(parents=True, exist_ok=True)
     cache_file = extract_dir / "audit.json"
 
@@ -250,12 +364,12 @@ def analyze_lecture_pdf(
         try:
             if os.path.getmtime(str(cache_file)) >= os.path.getmtime(pdf_path):
                 cached = json.loads(cache_file.read_text(encoding="utf-8"))
-                if cached.get("audit_version") == 2:
+                if cached.get("audit_version") == 3:
                     return cached
         except Exception:
             pass
 
-    assets = extract_pdf_assets(pdf_path, extract_dir)
+    assets = extract_pdf_assets(pdf_path, extract_dir, file_prefix=f"{course_compact}_S{clean_session}")
 
     layout = assets["layout"]
     total_pages = assets["total_pages"]
@@ -296,7 +410,7 @@ def analyze_lecture_pdf(
         gap_warnings.append(f"📄 **Dense Letter Format Detected:** This lecture contains **{layout['avg_words_per_page']} words/page** across **{num_sections} numbered sections**. Generating in **Regular Recap** or **Deep Dive** is recommended to ensure every mechanism is actively tested.")
 
     result = {
-        "audit_version": 2,
+        "audit_version": 3,
         "layout": layout,
         "total_pages": total_pages,
         "sections": sections,
@@ -610,6 +724,7 @@ def generate_cards_chunked(
 
     all_notes = []
     used_media_files = set()
+    figure_path_by_name: Dict[str, str] = {}
 
     system_instruction = f"""You are a master university flashcard architect specializing in high-yield Anki Cloze generation.
 Course: {course_code} ({unit_type} {session_num})
@@ -673,8 +788,10 @@ Density Setting: {density_mode}
    - **Qualitative Thermodynamics Over Raw Decimals**: Cloze whether a reaction is `{{{{c1::exergonic}}}}`/`endergonic` and `{{{{c1::irreversible}}}}`/`reversible` along with the chemical/orbital rationale (`{{{{c1::3p}}}}` vs `{{{{c1::2p}}}}` orbital overlap, `{{{{c1::C–S}}}}` vs `{{{{c1::C–O}}}}` bond stability, `{{{{c2::resonance stabilization}}}}`), keeping exact ΔG′° decimal numbers (`–29.6 kJ/mol`, `–33.5 kJ/mol`) un-clozed in parentheses for context unless the slide specifically contrasts energy-yield tiers.
    - **Zero Historical Trivia & Zero Recap Duplicates**: Never generate cards testing scientist names, Nobel Prizes, or discovery years (e.g., Fritz Lipmann / Hans Krebs 1953). Never generate duplicate summary cards from a lecture's final recap slide when those facts were already tested on earlier slides.
    - **Biochemical Fact-Checking of Slide Typos**: If a slide has an obvious scientific typo (e.g., stating NAD⁺ is derived from Vitamin B12 instead of **Vitamin B3 / niacin**), always test the **biochemically accurate fact** (`{{{{c2::Vitamin B3 (niacin)}}}}`) on the card front and mention the slide typo in `extra`.
-7. **SLIDE DIAGRAM EMBEDDING**:
-   - When a slide features an illustrative diagram (available in the extracted figures list), embed it in the 'extra' field using `<img src="FILENAME">` alongside at most a brief 1-sentence visual pointer (including on every unbundled step card of a multi-step mechanism!).
+7. **SLIDE DIAGRAM EMBEDDING & STRICT VISUAL RELEVANCE GATE**:
+   - Visually inspect each `[Candidate Figure on Slide X: FILENAME]` before embedding `<img src="FILENAME">` in `extra`.
+   - **ONLY** embed `<img src="FILENAME">` if that specific image is a **scientific diagram, chemical structure, reaction scheme, pathway flowchart, graph, or anatomical/molecular model** that **directly illustrates the exact concept tested on that card** (and belongs to the same slide!).
+   - **NEVER** embed campus/building photographs (e.g., SFU buildings), classroom/student photos, portraits of scientists, decorative stock graphics, or unrelated figures from a different slide/step. If no candidate figure on that slide is a relevant scientific diagram for the card, leave `<img ...>` out of `extra`.
 8. **ATOMICITY & NO BINARY CLOZES**:
    - Cloze specific molecular players, anatomical structures, or mechanisms. Never cloze generic binary words like high/low, yes/no, increase/decrease, or arbitrary step index numbers (`Step {{{{c1::0}}}}`).
 9. **FORMATTING**:
@@ -714,6 +831,11 @@ Density Setting: {density_mode}
                 batch_text_parts.append(f"\n--- Slide {s['page_num']} ---")
                 if s.get("sections"):
                     batch_text_parts.append(f"Sections on this slide: {', '.join(s['sections'])}")
+                s_fig_names = [Path(fp).name for fp in s.get("figure_paths", [])]
+                if s_fig_names:
+                    batch_text_parts.append(f"Extracted Figures on Slide {s['page_num']}: {', '.join(s_fig_names)}")
+                else:
+                    batch_text_parts.append(f"Extracted Figures on Slide {s['page_num']}: None")
                 batch_text_parts.append(s["text"])
 
                 # Attach full-resolution 150 DPI slide snapshot image if exists
@@ -726,15 +848,25 @@ Density Setting: {density_mode}
                     except Exception:
                         pass
 
-                # Track extracted figures
+                # Track extracted figures and attach labeled visual thumbnail for relevance verification
                 for fig_p in s.get("figure_paths", []):
                     fig_name = Path(fig_p).name
                     batch_available_figures.append(fig_name)
-                    used_media_files.add(fig_p)
+                    figure_path_by_name[fig_name] = fig_p
+                    if os.path.exists(fig_p):
+                        try:
+                            with Image.open(fig_p) as fim:
+                                fim.load()
+                                thumb = fim.copy()
+                                thumb.thumbnail((256, 256))
+                                batch_images.append(f"[Candidate Figure on Slide {s['page_num']}: {fig_name}]")
+                                batch_images.append(thumb)
+                        except Exception:
+                            pass
 
             if batch_available_figures:
                 batch_text_parts.append(
-                    f"\nAvailable diagram figures to embed in 'extra' (<img src=\"filename\">): {', '.join(batch_available_figures)}"
+                    f"\nValid diagram filenames in this batch (ONLY embed if visually verified as a relevant scientific diagram for that card): {', '.join(batch_available_figures)}"
                 )
 
             if custom_guidance:
@@ -747,10 +879,10 @@ Density Setting: {density_mode}
             )
 
             batch_prompt = f"""Referencing the uploaded Lecture Reference Header (.md) for overall lecture context, generate at least {b_target} distinct, high-yield Anki Cloze flashcards specifically {subsec_context}.
-CRITICAL SEQUENCING & COVERAGE RULES FOR THIS BATCH:
+CRITICAL SEQUENCING, COVERAGE & IMAGE RELEVANCE RULES FOR THIS BATCH:
 1. **Strict Slide Sequence**: Walk through Slides {start_slide} to {end_slide} in exact numerical order (Slide {start_slide} first, then Slide {min(start_slide + 1, end_slide)}, ..., up to Slide {end_slide}). Set `slide_number` on every note and NEVER jump back and forth between slides.
 2. **100% Testable Coverage (Zero Testable Material in `extra`)**: Every testable concept, mechanism, reaction type, enzyme, cofactor, ΔG′° value, regulator, or definition on Slides {start_slide}–{end_slide} MUST be tested via `{{{{c1::...}}}}`/`{{{{c2::...}}}}`/`{{{{c3::...}}}}` clozes in `text`. If a slide has more testable material than fits on one card, spawn additional cards for that slide!
-3. **Image & Clarification-Only `extra`**: The `extra` field may ONLY contain an embedded slide figure (`<img src="FILENAME">`) and/or a brief 1-sentence non-testable clarification. Before finalizing, audit every card's `extra` field and move any testable facts into active-recall Cloze cards.
+3. **Strict Visual Relevance Gate for `extra`**: Visually inspect the `[Candidate Figure on Slide X: FILENAME]` thumbnails before embedding `<img src="FILENAME">`. ONLY embed a figure if it is a genuine scientific diagram, chemical structure, pathway chart, or graph from that card's slide that directly illustrates the tested concept. NEVER embed campus/building photos, portraits, decorative graphics, or unrelated figures!
 
 Slide Content for this Batch:
 {chr(10).join(batch_text_parts)}
@@ -823,6 +955,8 @@ Slide Content for this Batch:
                     s_num = n.get("slide_number")
                     if not isinstance(s_num, int) or s_num < start_slide or s_num > end_slide:
                         n["slide_number"] = start_slide
+                # Strip any <img src="..."> that is not in the whitelisted batch figures
+                _sanitize_note_extra_images(batch_notes, set(batch_available_figures))
                 # Deterministic stable sort by slide_number within the batch
                 batch_notes.sort(key=lambda n: int(n.get("slide_number") or start_slide))
                 all_notes.extend(batch_notes)
@@ -841,6 +975,13 @@ Slide Content for this Batch:
 
     # Guarantee final deck-wide chronological slide ordering
     all_notes.sort(key=lambda n: int(n.get("slide_number") or 9999))
+
+    # Only include media files that are actually referenced in the generated notes
+    img_src_re = re.compile(r'<img\b[^>]*\bsrc=["\']([^"\']+)["\']', re.IGNORECASE)
+    for n in all_notes:
+        for fname in img_src_re.findall(n.get("extra", "")):
+            if fname in figure_path_by_name:
+                used_media_files.add(figure_path_by_name[fname])
 
     # Build final deck payload
     return {

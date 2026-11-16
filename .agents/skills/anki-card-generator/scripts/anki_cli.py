@@ -369,11 +369,13 @@ def cmd_inspect(args):
             slide_images.append(str(slide_img_path))
 
             # Also extract embedded figures
+            import hashlib
             for img_idx, img_info in enumerate(page.get_images(full=True)):
                 xref = img_info[0]
                 base_img = doc.extract_image(xref)
                 ext = base_img["ext"]
-                fig_name = f"{course_compact}_S{session_num}_slide_{pno+1:02d}_fig_{img_idx+1}.{ext}"
+                img_hash = hashlib.sha1(base_img["image"]).hexdigest()[:6]
+                fig_name = f"{course_compact}_S{session_num}_slide_{pno+1:02d}_fig_{img_idx+1}_{img_hash}.{ext}"
                 fig_path = images_dir / fig_name
                 with open(fig_path, "wb") as img_f:
                     img_f.write(base_img["image"])
